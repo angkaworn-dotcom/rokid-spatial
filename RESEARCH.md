@@ -38,12 +38,18 @@ not, and the differences are exactly the lessons:
 
 ## Double-tap the glasses to recenter
 
-Status: **candidate, not started.** `XRLinuxDriver/src/multitap.c` (~130
-lines) detects taps as spikes in the *derivative* of gyro magnitude over a
-25 ms window: state machine IDLE→RISE→FALL→PAUSE, tap duration ≤70 ms, taps
-≤750 ms apart, threshold 2000 (deg/s per s). Double-tap = recenter in their
-driver. Ports directly onto our 440 Hz IMU callback; needs nothing new from
-the hardware.
+Status: **shipped and confirmed working** (`RokidKit/TapDetector.swift`,
+toggle in More). Ported from `XRLinuxDriver/src/multitap.c` with two changes
+the real hardware demanded, both found by logging peak values live:
+
+- **The 25 ms derivative window had to shrink to 5 ms.** A tap's gyro spike
+  lasts a few samples at 440 Hz; the long window averaged real taps down to
+  ~270 °/s² — 7× under the threshold — while a 5 ms window keeps them at
+  4,300–13,900 against ≤1,816 for vigorous head shakes and ≤700 for normal
+  wear. Threshold set to 2,500.
+- **An accelerometer gate was added** (Δ|accel| > 3 m/s² between consecutive
+  samples). Taps measured 8–44; head shakes ≤1.5. A head movement now has to
+  pass two independent physical tests to fake a tap.
 
 ## Curved display
 

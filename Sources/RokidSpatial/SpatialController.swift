@@ -609,12 +609,16 @@ final class SpatialController: ObservableObject {
 
     private func startIMU() {
         let tapDetector = TapDetector(sampleRate: 440)
+        // For threshold tuning, set `tapDetector.debugLog` here — one line a
+        // second of peak-vs-threshold telemetry. The values in RESEARCH.md
+        // were measured that way.
         let imu = RokidIMU { [weak self] sample in
             guard let self else { return }
             self.filter.update(sample)
             self.samplesThisSecond += 1
             if self.doubleTapRecenter,
-               tapDetector.update(gyro: sample.gyro, timestamp: sample.timestamp) == 2 {
+               tapDetector.update(gyro: sample.gyro, accel: sample.accel,
+                                  timestamp: sample.timestamp) == 2 {
                 NSLog("RokidSpatial: double-tap — recentring")
                 self.recenter()
             }
