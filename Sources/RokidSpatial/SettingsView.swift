@@ -141,8 +141,12 @@ struct SettingsView: View {
 
                 slider("Lock while turning", value: $controller.motionLock,
                        range: 0...1, unit: "", format: "%.2f")
-                slider("Prediction", value: $controller.lookAhead,
-                       range: 0...0.050, unit: "s", format: "%.3f")
+
+                Toggle("Auto prediction (breezy tuning)", isOn: $controller.autoPrediction)
+                if !controller.autoPrediction {
+                    slider("Prediction", value: $controller.lookAhead,
+                           range: 0...0.050, unit: "s", format: "%.3f")
+                }
 
                 Text("⌃⌥Esc stop · ⌃⌥R centre · ⌃⌥C calibrate\n⌃⌥- ⌃⌥= distance · ⌃⌥[ ⌃⌥] size · ⌃⌥↑ ⌃⌥↓ height")
                     .font(.system(.caption2, design: .monospaced))

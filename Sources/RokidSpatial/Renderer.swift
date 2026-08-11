@@ -15,8 +15,14 @@ private let shaderSource = """
 #include <metal_stdlib>
 using namespace metal;
 
+// Two matrices, blended per vertex by the V texture coordinate. The panel
+// scans top to bottom, so lower rows light up later and want *more* motion
+// prediction; mvpTop is the transform for the first scanline and mvpBottom
+// for the last, a few milliseconds further along the head's rotation. The
+// angular difference is tiny (≤ ~2°), so lerping clip positions is fine.
 struct Uniforms {
-    float4x4 mvp;
+    float4x4 mvpTop;
+    float4x4 mvpBottom;
 };
 
 struct VertexOut {
@@ -32,7 +38,9 @@ vertex VertexOut vertexMain(uint vid [[vertex_id]],
 {
     float4 v = vertices[vid];
     VertexOut out;
-    out.position = uniforms.mvp * float4(v.xy, 0.0, 1.0);
+    float4 top = uniforms.mvpTop * float4(v.xy, 0.0, 1.0);
+    float4 bottom = uniforms.mvpBottom * float4(v.xy, 0.0, 1.0);
+    out.position = mix(top, bottom, v.w);
     out.uv = v.zw;
     return out;
 }
@@ -107,6 +115,25 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// was the more noticeable of the two.
     var lookAhead: Float = 0
 
+    /// Breezy-style automatic look-ahead. When on, `lookAhead` is ignored and
+    /// the prediction interval comes from XRLinuxDriver's Rokid-tuned values:
+    /// 20 ms + 0.6 × frametime, capped at 40 ms, plus an extra 8 ms ramped
+    /// down the frame because the panel scans top to bottom. Velocity comes
+    /// from differencing the *fused* orientation between frames rather than
+    /// from the gyro — the filter's smoothness carries into the prediction,
+    /// which is what kept breezy's version from jittering where ours did.
+    var autoLookAhead = false
+
+    private static let autoConstant: Float = 0.020
+    private static let autoFrametimeMultiplier: Float = 0.6
+    private static let autoCap: Float = 0.040
+    private static let autoScanlineAdjust: Float = 0.008
+
+    /// World-frame angular velocity from pose differencing, lightly smoothed.
+    private var poseVelocity = SIMD3<Float>(repeating: 0)
+    private var previousHead: simd_quatf?
+    private var smoothedFrametime: Float = 1.0 / 120.0
+
     /// Pixel dimensions of the most recent captured frame.
     private(set) var contentSize = SIMD2<Float>(0, 0)
 
@@ -177,14 +204,60 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
+    /// The head orientation `interval` seconds from now, extrapolated along
+    /// the pose-differenced velocity. World-frame, so it pre-multiplies.
+    private func predictHead(_ head: simd_quatf, interval: Float) -> simd_quatf {
+        let speed = simd_length(poseVelocity)
+        guard interval > 0, speed > 1e-4 else { return head }
+        let step = simd_quatf(angle: speed * interval, axis: poseVelocity / speed)
+        return (step * head).normalized
+    }
+
     func draw(in view: MTKView) {
         let now = CFAbsoluteTimeGetCurrent()
         let dt = Float(now - lastDrawTime)
         lastDrawTime = now
 
-        let head = filter.predictedRelativeOrientation(lookAhead: lookAhead)
+        // The unpredicted head drives the anchor logic — predicting there
+        // would make follow mode chase a place the head never quite reaches.
+        let head = filter.relativeOrientation
         screen.update(head: head, dt: dt,
                       rotationRate: simd_length(filter.angularVelocity))
+
+        // Velocity by differencing consecutive fused orientations. The filter
+        // has already smoothed and gravity-corrected them, so this is far
+        // calmer than the gyro; a light EMA settles the remainder.
+        if dt > 0, dt < 0.5 {
+            smoothedFrametime += (dt - smoothedFrametime) * min(1, dt / 0.25)
+            if let previous = previousHead {
+                let delta = (head * previous.inverse).normalized
+                let angle = 2 * acos(min(max(abs(delta.real), -1), 1))
+                let axisLength = simd_length(delta.imag)
+                let instantaneous = axisLength > 1e-6 && angle > 1e-6
+                    ? delta.imag / axisLength * (delta.real < 0 ? -1 : 1) * (angle / dt)
+                    : SIMD3<Float>(repeating: 0)
+                poseVelocity += (instantaneous - poseVelocity) * min(1, dt / 0.030)
+            }
+        }
+        previousHead = head
+
+        // Prediction interval: breezy's Rokid tuning when automatic, the
+        // manual slider otherwise. The scanline term only exists in auto.
+        let baseInterval: Float
+        let scanlineInterval: Float
+        if autoLookAhead {
+            baseInterval = min(Self.autoConstant
+                               + Self.autoFrametimeMultiplier * smoothedFrametime,
+                               Self.autoCap)
+            scanlineInterval = Self.autoScanlineAdjust
+        } else {
+            baseInterval = lookAhead
+            scanlineInterval = 0
+        }
+        let headTop = predictHead(head, interval: baseInterval)
+        let headBottom = scanlineInterval > 0
+            ? predictHead(head, interval: baseInterval + scanlineInterval)
+            : headTop
 
         guard let drawable = view.currentDrawable,
               let descriptor = view.currentRenderPassDescriptor,
@@ -233,11 +306,13 @@ final class Renderer: NSObject, MTKViewDelegate {
             // the mouse's fractional position. Local plane coordinates run
             // x = 2u−1, y = 1−2v (v is top-left like the texture).
             var cursorVertices: [SIMD4<Float>]?
+            var cursorScanline: Float = 0
             if let position = cursorPosition?(), cursorTexture != nil {
                 let u0 = position.x - cursorHotspotFraction.x
                 let v0 = position.y - cursorHotspotFraction.y
                 let u1 = u0 + cursorFraction.x
                 let v1 = v0 + cursorFraction.y
+                cursorScanline = position.y
                 cursorVertices = [
                     SIMD4(2 * u0 - 1, 1 - 2 * v1, 0, 1),
                     SIMD4(2 * u1 - 1, 1 - 2 * v1, 1, 1),
@@ -245,10 +320,21 @@ final class Renderer: NSObject, MTKViewDelegate {
                     SIMD4(2 * u1 - 1, 1 - 2 * v0, 1, 0),
                 ]
             }
+            // The cursor sprite's own V coordinate is sprite-local, so the
+            // scanline blend must not apply across it; it gets one transform,
+            // predicted for the scanline the sprite actually sits on.
+            let headCursor = scanlineInterval > 0
+                ? predictHead(head, interval: baseInterval + scanlineInterval * cursorScanline)
+                : headTop
 
             let eyes: [(offset: Float, originX: Double)] = stereo
                 ? [(-screen.ipd / 2, 0), (screen.ipd / 2, eyeWidth)]
                 : [(0, 0)]
+
+            struct EyeUniforms {
+                var mvpTop: simd_float4x4
+                var mvpBottom: simd_float4x4
+            }
 
             for eye in eyes {
                 encoder.setViewport(MTLViewport(
@@ -256,10 +342,14 @@ final class Renderer: NSObject, MTKViewDelegate {
                     width: eyeWidth, height: height,
                     znear: 0, zfar: 1
                 ))
-                let view = screen.viewMatrix(head: head, eyeOffset: eye.offset)
-                var uniforms = projection * view * model
+                let viewTop = screen.viewMatrix(head: headTop, eyeOffset: eye.offset)
+                let viewBottom = screen.viewMatrix(head: headBottom, eyeOffset: eye.offset)
+                var uniforms = EyeUniforms(
+                    mvpTop: projection * viewTop * model,
+                    mvpBottom: projection * viewBottom * model
+                )
                 encoder.setVertexBytes(&uniforms,
-                                       length: MemoryLayout<simd_float4x4>.size,
+                                       length: MemoryLayout<EyeUniforms>.size,
                                        index: 1)
 
                 encoder.setRenderPipelineState(pipeline)
@@ -268,6 +358,12 @@ final class Renderer: NSObject, MTKViewDelegate {
                 encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
 
                 if let cursorVertices, let cursorTexture {
+                    let viewCursor = screen.viewMatrix(head: headCursor, eyeOffset: eye.offset)
+                    let mvpCursor = projection * viewCursor * model
+                    var cursorUniforms = EyeUniforms(mvpTop: mvpCursor, mvpBottom: mvpCursor)
+                    encoder.setVertexBytes(&cursorUniforms,
+                                           length: MemoryLayout<EyeUniforms>.size,
+                                           index: 1)
                     encoder.setRenderPipelineState(cursorPipeline)
                     encoder.setVertexBytes(cursorVertices,
                                            length: MemoryLayout<SIMD4<Float>>.stride * 4,

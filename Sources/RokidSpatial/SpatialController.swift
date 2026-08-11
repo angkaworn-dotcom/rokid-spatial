@@ -38,6 +38,8 @@ final class SpatialController: ObservableObject {
     @Published var settleSpeed: Float = 0.7 { didSet { screen.settleSpeed = settleSpeed; persist(settleSpeed, "settleSpeed") } }
     @Published var ipd: Float = 0.063 { didSet { screen.ipd = ipd; persist(ipd, "ipd") } }
     @Published var lookAhead: Float = 0 { didSet { renderer?.lookAhead = lookAhead; persist(lookAhead, "lookAhead") } }
+    /// Breezy-style automatic prediction — see `Renderer.autoLookAhead`.
+    @Published var autoPrediction = false { didSet { renderer?.autoLookAhead = autoPrediction; persist(autoPrediction, "autoPrediction") } }
     @Published var motionLock: Float = 0 { didSet { screen.motionLock = motionLock; persist(motionLock, "motionLock") } }
 
     /// Panel pixels per captured pixel across the virtual screen. 1.0 means
@@ -202,6 +204,7 @@ final class SpatialController: ObservableObject {
             virtualResolution = v
         }
         if d.object(forKey: "virtualIsMain") != nil { virtualIsMain = d.bool(forKey: "virtualIsMain") }
+        if d.object(forKey: "autoPrediction") != nil { autoPrediction = d.bool(forKey: "autoPrediction") }
 
         func load(_ key: String, into value: inout Float) {
             if d.object(forKey: key) != nil { value = d.float(forKey: key) }
@@ -337,6 +340,7 @@ final class SpatialController: ObservableObject {
         }
         renderer.stereo = false
         renderer.lookAhead = lookAhead
+        renderer.autoLookAhead = autoPrediction
         self.renderer = renderer
 
         createOverlayWindow(renderer: renderer)
