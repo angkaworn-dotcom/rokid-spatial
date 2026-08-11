@@ -34,6 +34,9 @@ final class SpatialController: ObservableObject {
     @Published var diagonal: Float = 1.5 { didSet { screen.diagonal = diagonal; persist(diagonal, "diagonal") } }
     @Published var height: Float = 0 { didSet { screen.verticalOffset = height; persist(height, "height") } }
     @Published var curved = false { didSet { screen.curved = curved; persist(curved, "curved") } }
+    /// Glasses-only: a second virtual desktop rendered as a screen hanging to
+    /// the right of the main one.
+    @Published var sideScreen = false { didSet { persist(sideScreen, "sideScreen") } }
     @Published var deadzone: Float = 6 { didSet { screen.deadzoneDegrees = deadzone; persist(deadzone, "deadzone") } }
     @Published var followSpeed: Float = 3.0 { didSet { screen.followSpeed = followSpeed; persist(followSpeed, "followSpeed") } }
     @Published var settleSpeed: Float = 0.7 { didSet { screen.settleSpeed = settleSpeed; persist(settleSpeed, "settleSpeed") } }
@@ -126,6 +129,7 @@ final class SpatialController: ObservableObject {
     }()
     private let virtualDisplay = VirtualDisplay()
     private let capture = ScreenCapture()
+    private let sideCapture = ScreenCapture()
     private var renderer: Renderer?
     private var window: NSWindow?
     private var metalView: MTKView?
@@ -209,6 +213,7 @@ final class SpatialController: ObservableObject {
         if d.object(forKey: "virtualIsMain") != nil { virtualIsMain = d.bool(forKey: "virtualIsMain") }
         if d.object(forKey: "doubleTapRecenter") != nil { doubleTapRecenter = d.bool(forKey: "doubleTapRecenter") }
         if d.object(forKey: "curved") != nil { curved = d.bool(forKey: "curved") }
+        if d.object(forKey: "sideScreen") != nil { sideScreen = d.bool(forKey: "sideScreen") }
 
         func load(_ key: String, into value: inout Float) {
             if d.object(forKey: key) != nil { value = d.float(forKey: key) }
@@ -282,15 +287,34 @@ final class SpatialController: ObservableObject {
             }
         }
 
+        // The side screen borrows the same virtual-display machinery, which
+        // is otherwise idle in glasses-only mode. Created before the display
+        // reconfiguration for the same reason as above.
+        if source == .glassesOnly, sideScreen {
+            do {
+                try virtualDisplay.create(width: 1440, height: 900, hiDPI: true)
+            } catch {
+                // Not worth failing the whole session over.
+                Self.appendLog("side screen unavailable: \(error)")
+            }
+        }
+
         let displayMode = DisplayMode.highRefreshRate
         setStatus("Switching the glasses to 120 Hz…")
 
         // Display reconfiguration blocks for a few seconds while the panel
         // renegotiates, so keep it off the main thread.
+        // Native resolution needs no mode change; anything else is applied to
+        // the glasses display after the panel settles.
+        let desktopSize: (width: Int, height: Int)? =
+            virtualResolution == .r1920x1200
+                ? nil
+                : (virtualResolution.width, virtualResolution.height)
+
         Task.detached(priority: .userInitiated) { [displays, source] in
             do {
                 if source == .glassesOnly {
-                    try displays.prepareGlassesOnly(mode: displayMode)
+                    try displays.prepareGlassesOnly(mode: displayMode, desktopSize: desktopSize)
                 } else {
                     // Let macOS enumerate the new display before rearranging.
                     Thread.sleep(forTimeInterval: 2.0)
@@ -399,6 +423,30 @@ final class SpatialController: ObservableObject {
                 savedBrightness = BuiltinBrightness.get(deskID) ?? 0.5
                 BuiltinBrightness.set(deskID, to: 0)
             }
+
+            // The side screen, if its display came up: put it to the right of
+            // the main desktop, capture it, and hand frames to the renderer.
+            if sideScreen, let sideID = virtualDisplay.displayID {
+                displays.positionToRight(sideID, of: captureID)
+                sideCapture.onFrame = { [weak renderer] buffer in
+                    renderer?.submitSide(frame: buffer)
+                }
+                sideCapture.onStop = { error in
+                    // Losing the side screen is cosmetic; never end the
+                    // session over it.
+                    Self.appendLog("side capture stopped: \(error.localizedDescription)")
+                }
+                do {
+                    // Mostly-static content; half rate is plenty and halves
+                    // the capture cost.
+                    try await sideCapture.start(displayID: sideID, frameRate: 60,
+                                                showsCursor: false)
+                    renderer.sideEnabled = true
+                } catch {
+                    Self.appendLog("side capture failed to start: \(error)")
+                }
+            }
+
             attachRenderedCursor(to: renderer, displayID: captureID)
             SystemCursor.hide()
             cursorTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
@@ -422,19 +470,34 @@ final class SpatialController: ObservableObject {
             options: [.SRGB: false, .textureUsage: MTLTextureUsage.shaderRead.rawValue]
         ) else { return }
 
-        let bounds = CGDisplayBounds(displayID)
-        let displaySize = SIMD2(Float(bounds.width), Float(bounds.height))
+        let imageSize = SIMD2(Float(image.size.width), Float(image.size.height))
+        let hotspot = SIMD2(Float(cursor.hotSpot.x), Float(cursor.hotSpot.y))
+        func fractions(of bounds: CGRect) -> (size: SIMD2<Float>, hotspot: SIMD2<Float>) {
+            let display = SIMD2(Float(bounds.width), Float(bounds.height))
+            return (imageSize / display, hotspot / display)
+        }
+
+        let mainBounds = CGDisplayBounds(displayID)
         renderer.cursorTexture = texture
-        renderer.cursorFraction = SIMD2(Float(image.size.width),
-                                        Float(image.size.height)) / displaySize
-        renderer.cursorHotspotFraction = SIMD2(Float(cursor.hotSpot.x),
-                                               Float(cursor.hotSpot.y)) / displaySize
+        (renderer.cursorFraction[0], renderer.cursorHotspotFraction[0]) = fractions(of: mainBounds)
+
+        let sideBounds: CGRect? = sideScreen
+            ? virtualDisplay.displayID.map { CGDisplayBounds($0) } : nil
+        if let sideBounds {
+            (renderer.cursorFraction[1], renderer.cursorHotspotFraction[1]) = fractions(of: sideBounds)
+        }
+
         renderer.cursorPosition = {
             // CGEvent's location is global, top-left origin — the same space
-            // as the captured display's bounds.
+            // as the displays' bounds.
             guard let location = CGEvent(source: nil)?.location else { return nil }
-            return SIMD2(Float(location.x - bounds.minX) / displaySize.x,
-                         Float(location.y - bounds.minY) / displaySize.y)
+            func uv(in bounds: CGRect) -> SIMD2<Float> {
+                SIMD2(Float((location.x - bounds.minX) / bounds.width),
+                      Float((location.y - bounds.minY) / bounds.height))
+            }
+            if mainBounds.contains(location) { return (0, uv(in: mainBounds)) }
+            if let sideBounds, sideBounds.contains(location) { return (1, uv(in: sideBounds)) }
+            return nil
         }
     }
 
@@ -462,6 +525,7 @@ final class SpatialController: ObservableObject {
         Self.appendLog("Stop — tearing down")
         Task {
             await capture.stop()
+            await sideCapture.stop()
             teardown()
             restoreBrightness()
             isRunning = false

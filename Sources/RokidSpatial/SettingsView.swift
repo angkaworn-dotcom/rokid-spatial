@@ -87,6 +87,11 @@ struct SettingsView: View {
                    range: -1.5...1.5, unit: "m", format: "%+.2f")
             Toggle("Curved screen", isOn: $controller.curved)
                 .font(.caption)
+            if controller.source == .glassesOnly {
+                Toggle("Side screen (right)", isOn: $controller.sideScreen)
+                    .font(.caption)
+                    .disabled(controller.isRunning)
+            }
         }
     }
 
@@ -114,7 +119,7 @@ struct SettingsView: View {
     private var advanced: some View {
         DisclosureGroup("More", isExpanded: $showAdvanced) {
             VStack(alignment: .leading, spacing: 10) {
-                if controller.source == .virtualDesktop {
+                if controller.source == .virtualDesktop || controller.source == .glassesOnly {
                     labelled("Desktop size") {
                         Picker("", selection: $controller.virtualResolution) {
                             ForEach(SpatialController.VirtualResolution.allCases) { resolution in
@@ -125,6 +130,8 @@ struct SettingsView: View {
                         .labelsHidden()
                         .disabled(controller.isRunning)
                     }
+                }
+                if controller.source == .virtualDesktop {
                     Toggle("Work in the glasses", isOn: $controller.virtualIsMain)
                         .disabled(controller.isRunning)
                 }

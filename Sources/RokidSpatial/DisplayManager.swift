@@ -199,7 +199,7 @@ final class DisplayManager {
     /// very display it covers (verified empirically). So let macOS mirror the
     /// way it insists on, with the glasses as master so the desktop runs at
     /// panel-native size, and there is exactly one desktop anywhere.
-    func prepareGlassesOnly(mode: DisplayMode) throws {
+    func prepareGlassesOnly(mode: DisplayMode, desktopSize: (width: Int, height: Int)? = nil) throws {
         previousMode = try? RokidDisplay.currentMode()
         try RokidDisplay.setMode(mode)
         Thread.sleep(forTimeInterval: 3.0)
@@ -220,6 +220,45 @@ final class DisplayManager {
             }
             Thread.sleep(forTimeInterval: 1.0)
         }
+
+        // Optionally run the desktop at a scaled resolution: everything gets
+        // bigger, the GPU upscales to the panel's native raster. The panel
+        // never sees anything but its own timing — this only changes the
+        // framebuffer the desktop is drawn into.
+        if let desktopSize {
+            setDesktopResolution(glassesID, width: desktopSize.width, height: desktopSize.height)
+        }
+    }
+
+    /// Pick the display mode matching `width`×`height` with the highest
+    /// refresh rate. Silently stays native when no such mode exists.
+    private func setDesktopResolution(_ display: CGDirectDisplayID, width: Int, height: Int) {
+        let current = CGDisplayCopyDisplayMode(display)
+        guard current?.width != width || current?.height != height else { return }
+
+        guard let all = CGDisplayCopyAllDisplayModes(display, nil) as? [CGDisplayMode],
+              let best = all.filter({ $0.width == width && $0.height == height })
+                            .max(by: { $0.refreshRate < $1.refreshRate })
+        else {
+            log?("glasses-only: the glasses offer no \(width)×\(height) mode; staying native")
+            return
+        }
+        log?(String(format: "glasses-only: desktop %d×%d @ %.0f Hz", width, height, best.refreshRate))
+        try? configure { config in
+            CGConfigureDisplayWithDisplayMode(config, display, best, nil)
+        }
+        Thread.sleep(forTimeInterval: 1.5)
+    }
+
+    /// Put `display` immediately to the right of `anchor`, top-aligned — used
+    /// for the side screen, so the pointer leaves the main desktop on the same
+    /// side the eye sees the second screen.
+    func positionToRight(_ display: CGDirectDisplayID, of anchor: CGDirectDisplayID) {
+        let width = Int32(CGDisplayPixelsWide(anchor))
+        try? configure { config in
+            CGConfigureDisplayOrigin(config, display, width, 0)
+        }
+        Thread.sleep(forTimeInterval: 0.5)
     }
 
     /// Restore for glasses-only mode: panel back to 2D, mirroring left exactly

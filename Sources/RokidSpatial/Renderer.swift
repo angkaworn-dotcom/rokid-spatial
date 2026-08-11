@@ -86,21 +86,34 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     /// Arrow sprite; nil disables cursor drawing entirely (other modes).
     var cursorTexture: MTLTexture?
-    /// Cursor image size as a fraction of the captured display.
-    var cursorFraction = SIMD2<Float>(0, 0)
-    /// Hotspot offset within the image, as a fraction of the display.
-    var cursorHotspotFraction = SIMD2<Float>(0, 0)
-    /// Called each frame; returns the cursor position as UV (0…1, top-left
-    /// origin) on the captured display, or nil to skip drawing.
-    var cursorPosition: (() -> SIMD2<Float>?)?
+    /// Cursor image size as a fraction of each captured display (index 0 is
+    /// the main screen, 1 the side screen — their point sizes differ).
+    var cursorFraction = [SIMD2<Float>(0, 0), SIMD2<Float>(0, 0)]
+    /// Hotspot offset within the image, as a fraction of each display.
+    var cursorHotspotFraction = [SIMD2<Float>(0, 0), SIMD2<Float>(0, 0)]
+    /// Called each frame; returns which surface the cursor is on (0 main,
+    /// 1 side) and its UV (0…1, top-left origin), or nil to skip drawing.
+    var cursorPosition: (() -> (surface: Int, uv: SIMD2<Float>)?)?
+
+    // MARK: Side screen
+
+    /// The side screen hangs to the right of the main one at the same
+    /// distance, sharing the anchor — turn your head and it is simply there,
+    /// like a second monitor. Fed by its own capture stream.
+    var sideEnabled = false
+    /// Angular gap between the main and side screens, radians.
+    private static let sideGap: Float = 0.06
 
     private let filter: OrientationFilter
     private let screen: VirtualScreen
 
-    /// Latest captured frame, handed over from the capture queue.
+    /// Latest captured frames, handed over from the capture queues.
     private var pendingFrame: CVPixelBuffer?
+    private var pendingSideFrame: CVPixelBuffer?
     private var frameLock = NSLock()
     private var currentTexture: CVMetalTexture?
+    private var currentSideTexture: CVMetalTexture?
+    private let sideVertexBuffer: MTLBuffer
 
     private var lastDrawTime = CFAbsoluteTimeGetCurrent()
 
@@ -157,8 +170,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard let buffer = device.makeBuffer(
             length: MemoryLayout<SIMD4<Float>>.stride * Self.meshVertexCount * 2,
             options: .storageModeShared
+        ), let sideBuffer = device.makeBuffer(
+            length: MemoryLayout<SIMD4<Float>>.stride * Self.meshVertexCount * 2,
+            options: .storageModeShared
         ) else { return nil }
         vertexBuffer = buffer
+        sideVertexBuffer = sideBuffer
 
         super.init()
 
@@ -170,6 +187,49 @@ final class Renderer: NSObject, MTKViewDelegate {
         frameLock.lock()
         pendingFrame = frame
         frameLock.unlock()
+    }
+
+    /// Same, for the side screen's capture stream.
+    func submitSide(frame: CVPixelBuffer) {
+        frameLock.lock()
+        pendingSideFrame = frame
+        frameLock.unlock()
+    }
+
+    /// Rotate `point` about the anchor's vertical axis — how the side screen
+    /// swings away from the main one.
+    private static func rotateY(_ point: SIMD3<Float>, _ angle: Float) -> SIMD3<Float> {
+        let c = cos(angle), s = sin(angle)
+        return SIMD3(point.x * c + point.z * s, point.y, -point.x * s + point.z * c)
+    }
+
+    /// Fill a mesh buffer with the screen surface, optionally swung by
+    /// `azimuth` radians about the vertical axis.
+    private func fillMesh(_ buffer: MTLBuffer, aspect: Float, azimuth: Float) {
+        let mesh = buffer.contents().bindMemory(
+            to: SIMD4<Float>.self, capacity: Self.meshVertexCount * 2)
+        for column in 0...Self.meshColumns {
+            let u = Float(column) / Float(Self.meshColumns)
+            var bottom = screen.surfacePoint(u: u, v: 1, aspect: aspect)
+            var top = screen.surfacePoint(u: u, v: 0, aspect: aspect)
+            if azimuth != 0 {
+                bottom = Self.rotateY(bottom, azimuth)
+                top = Self.rotateY(top, azimuth)
+            }
+            let base = column * 4
+            mesh[base + 0] = SIMD4(bottom.x, bottom.y, bottom.z, 1)
+            mesh[base + 1] = SIMD4(u, 1, 0, 0)
+            mesh[base + 2] = SIMD4(top.x, top.y, top.z, 1)
+            mesh[base + 3] = SIMD4(u, 0, 0, 0)
+        }
+    }
+
+    /// The side screen's centre direction relative to the main screen's,
+    /// radians about the vertical axis. Negative swings right.
+    private func sideAzimuth(mainAspect: Float, sideAspect: Float) -> Float {
+        let mainHalf = screen.size(aspect: mainAspect).x / (2 * screen.distance)
+        let sideHalf = screen.size(aspect: sideAspect).x / (2 * screen.distance)
+        return -(mainHalf + sideHalf + Self.sideGap)
     }
 
     // MARK: MTKViewDelegate
@@ -212,20 +272,18 @@ final class Renderer: NSObject, MTKViewDelegate {
             let contentAspect = Float(texture.width) / Float(texture.height)
             let model = screen.anchorRotation()
 
-            // Rebuild the screen surface: alternating bottom/top vertices per
-            // column form one triangle strip across the (possibly curved)
-            // surface, positions in the anchor's local frame.
-            let mesh = vertexBuffer.contents().bindMemory(
-                to: SIMD4<Float>.self, capacity: Self.meshVertexCount * 2)
-            for column in 0...Self.meshColumns {
-                let u = Float(column) / Float(Self.meshColumns)
-                let bottom = screen.surfacePoint(u: u, v: 1, aspect: contentAspect)
-                let top = screen.surfacePoint(u: u, v: 0, aspect: contentAspect)
-                let base = column * 4
-                mesh[base + 0] = SIMD4(bottom.x, bottom.y, bottom.z, 1)
-                mesh[base + 1] = SIMD4(u, 1, 0, 0)
-                mesh[base + 2] = SIMD4(top.x, top.y, top.z, 1)
-                mesh[base + 3] = SIMD4(u, 0, 0, 0)
+            // Rebuild the screen surfaces: alternating bottom/top vertices
+            // per column form one triangle strip across each (possibly
+            // curved) surface, positions in the anchor's local frame.
+            fillMesh(vertexBuffer, aspect: contentAspect, azimuth: 0)
+
+            let sideTexture = sideEnabled ? prepareSideTexture() : nil
+            var azimuth: Float = 0
+            var sideAspect: Float = 1
+            if let sideTexture {
+                sideAspect = Float(sideTexture.width) / Float(sideTexture.height)
+                azimuth = sideAzimuth(mainAspect: contentAspect, sideAspect: sideAspect)
+                fillMesh(sideVertexBuffer, aspect: sideAspect, azimuth: azimuth)
             }
 
             // Convert the quoted diagonal FOV into the vertical one Metal wants.
@@ -244,26 +302,32 @@ final class Renderer: NSObject, MTKViewDelegate {
             renderedWidth = Float(eyeWidth) * extent.x
                 / (screen.distance * 2 * tan(fovY / 2) * aspect)
 
-            // The cursor quad sits on the same surface as the screen, at the
-            // mouse's fractional position — its corners go through the same
-            // surface mapping, so it follows the curvature too.
+            // The cursor quad sits on whichever surface the mouse is on, at
+            // its fractional position — its corners go through the same
+            // surface mapping, so it follows curvature and the side swing.
             var cursorVertices: [SIMD4<Float>]?
-            if let position = cursorPosition?(), cursorTexture != nil {
-                let u0 = position.x - cursorHotspotFraction.x
-                let v0 = position.y - cursorHotspotFraction.y
-                let u1 = u0 + cursorFraction.x
-                let v1 = v0 + cursorFraction.y
+            if let position = cursorPosition?(), cursorTexture != nil,
+               position.surface == 0 || sideTexture != nil {
+                let onSide = position.surface == 1
+                let fraction = cursorFraction[position.surface]
+                let hotspot = cursorHotspotFraction[position.surface]
+                let aspect = onSide ? sideAspect : contentAspect
+                let u0 = position.uv.x - hotspot.x
+                let v0 = position.uv.y - hotspot.y
+                let u1 = u0 + fraction.x
+                let v1 = v0 + fraction.y
                 // Nudged toward the viewer so it never z-fights the screen.
-                let corners = [
+                cursorVertices = [
                     (u0, v1, SIMD2<Float>(0, 1)),
                     (u1, v1, SIMD2<Float>(1, 1)),
                     (u0, v0, SIMD2<Float>(0, 0)),
                     (u1, v0, SIMD2<Float>(1, 0)),
                 ].flatMap { (u, v, uv) -> [SIMD4<Float>] in
-                    let p = screen.surfacePoint(u: u, v: v, aspect: contentAspect) * 0.995
+                    var p = screen.surfacePoint(u: u, v: v, aspect: aspect)
+                    if onSide { p = Self.rotateY(p, azimuth) }
+                    p *= 0.995
                     return [SIMD4(p.x, p.y, p.z, 1), SIMD4(uv.x, uv.y, 0, 0)]
                 }
-                cursorVertices = corners
             }
 
             let eyes: [(offset: Float, originX: Double)] = stereo
@@ -287,6 +351,13 @@ final class Renderer: NSObject, MTKViewDelegate {
                 encoder.setFragmentTexture(texture, index: 0)
                 encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0,
                                        vertexCount: Self.meshVertexCount)
+
+                if let sideTexture {
+                    encoder.setVertexBuffer(sideVertexBuffer, offset: 0, index: 0)
+                    encoder.setFragmentTexture(sideTexture, index: 0)
+                    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0,
+                                           vertexCount: Self.meshVertexCount)
+                }
 
                 if let cursorVertices, let cursorTexture {
                     encoder.setRenderPipelineState(cursorPipeline)
@@ -334,6 +405,28 @@ final class Renderer: NSObject, MTKViewDelegate {
         currentTexture = wrapped
 
         contentSize = SIMD2(Float(width), Float(height))
+        return source
+    }
+
+    /// Side-screen counterpart of `prepareTexture`.
+    private func prepareSideTexture() -> MTLTexture? {
+        frameLock.lock()
+        let frame = pendingSideFrame
+        frameLock.unlock()
+
+        let previous = currentSideTexture.flatMap { CVMetalTextureGetTexture($0) }
+        guard let frame, let textureCache else { return previous }
+
+        var wrapped: CVMetalTexture?
+        let status = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault, textureCache, frame, nil, .bgra8Unorm,
+            CVPixelBufferGetWidth(frame), CVPixelBufferGetHeight(frame), 0, &wrapped
+        )
+        guard status == kCVReturnSuccess,
+              let wrapped,
+              let source = CVMetalTextureGetTexture(wrapped)
+        else { return previous }
+        currentSideTexture = wrapped
         return source
     }
 }
