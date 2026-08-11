@@ -60,6 +60,14 @@ public final class VirtualScreen {
         didSet { verticalOffset = min(max(verticalOffset, -2.0), 2.0) }
     }
 
+    /// Bend the screen into a cylinder arc of radius `distance`, so every
+    /// point of it sits the same distance from the eye. Flat screens read
+    /// fine at modest sizes; past a couple of metres wide the edges of a flat
+    /// screen are markedly further away than the centre and visibly skewed,
+    /// which is exactly what curving fixes. Same idea as breezy-desktop's
+    /// `curved_display`.
+    public var curved = false
+
     /// How far the head can turn before the screen starts to follow, degrees.
     ///
     /// Keep this well under the vertical field of view, which is only about
@@ -184,17 +192,30 @@ public final class VirtualScreen {
         return SIMD2(height * aspect, height)
     }
 
-    /// Model matrix placing the screen quad in world space: rotated to the
-    /// anchor, pushed `distance` metres along the anchor's forward axis.
+    /// A point on the screen surface in the anchor's local frame, for texture
+    /// coordinates `u` (0 left → 1 right) and `v` (0 top → 1 bottom).
+    ///
+    /// Flat, the screen is a plane `distance` metres along -Z. Curved, it is
+    /// an arc of a cylinder of radius `distance` centred on the viewer, with
+    /// the arc length equal to the flat width so apparent size is preserved.
     ///
     /// Device axes were measured as X = pitch (right), Y = yaw (up),
     /// Z = roll (forward/back); with a right-handed frame and Y up, the
     /// viewing direction is -Z.
-    public func modelMatrix(aspect: Float) -> simd_float4x4 {
+    public func surfacePoint(u: Float, v: Float, aspect: Float) -> SIMD3<Float> {
         let extent = size(aspect: aspect)
-        let scale = simd_float4x4(diagonal: SIMD4(extent.x / 2, extent.y / 2, 1, 1))
-        let translation = simd_float4x4(translation: SIMD3(0, verticalOffset, -distance))
-        return simd_float4x4(displayAnchor) * translation * scale
+        let y = (0.5 - v) * extent.y + verticalOffset
+        if curved {
+            let angle = (u - 0.5) * extent.x / distance
+            return SIMD3(distance * sin(angle), y, -distance * cos(angle))
+        }
+        return SIMD3((u - 0.5) * extent.x, y, -distance)
+    }
+
+    /// Rotation-only model transform; the surface geometry itself comes from
+    /// `surfacePoint(u:v:aspect:)`.
+    public func anchorRotation() -> simd_float4x4 {
+        simd_float4x4(displayAnchor)
     }
 
     /// View matrix for one eye: undo the head rotation, then step sideways by

@@ -85,6 +85,8 @@ struct SettingsView: View {
                    range: 0.3...8, unit: "m", format: "%.1f")
             slider("Height", value: $controller.height,
                    range: -1.5...1.5, unit: "m", format: "%+.2f")
+            Toggle("Curved screen", isOn: $controller.curved)
+                .font(.caption)
         }
     }
 

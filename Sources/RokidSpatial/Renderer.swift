@@ -24,16 +24,16 @@ struct VertexOut {
     float2 uv;
 };
 
-// Vertices arrive packed as (x, y, u, v): the quad is flat in its local
-// frame, so the z coordinate is always zero and the slot is reused for UV.
+// Vertices arrive as float4 pairs: position (xyz, 1) then UV in (x, y).
+// Real 3D positions rather than a flat local quad, because the screen
+// surface may be curved — geometry is built CPU-side per frame.
 vertex VertexOut vertexMain(uint vid [[vertex_id]],
                             const device float4 *vertices [[buffer(0)]],
                             constant Uniforms &uniforms [[buffer(1)]])
 {
-    float4 v = vertices[vid];
     VertexOut out;
-    out.position = uniforms.mvp * float4(v.xy, 0.0, 1.0);
-    out.uv = v.zw;
+    out.position = uniforms.mvp * float4(vertices[vid * 2].xyz, 1.0);
+    out.uv = vertices[vid * 2 + 1].xy;
     return out;
 }
 
@@ -64,6 +64,11 @@ fragment float4 fragmentCursor(VertexOut in [[stage_in]],
 final class Renderer: NSObject, MTKViewDelegate {
     /// Diagonal field of view of the Rokid Max optics.
     private static let diagonalFOV: Float = 50 * .pi / 180
+
+    /// Vertical slices in the screen mesh. Enough that a fully curved wide
+    /// screen renders smoothly; irrelevant to flat screens.
+    private static let meshColumns = 64
+    private static let meshVertexCount = (meshColumns + 1) * 2
 
     let device: MTLDevice
     private let commandQueue: MTLCommandQueue
@@ -146,17 +151,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             return nil
         }
 
-        // Triangle strip over the unit quad. Texture V is flipped because
-        // Metal samples with the origin at the top left.
-        let vertices: [SIMD4<Float>] = [
-            SIMD4(-1, -1, 0, 1),
-            SIMD4( 1, -1, 1, 1),
-            SIMD4(-1,  1, 0, 0),
-            SIMD4( 1,  1, 1, 0),
-        ]
+        // The screen mesh: a triangle strip of vertical slices, rebuilt each
+        // frame because size, distance and curvature are all live-adjustable.
+        // Flat screens waste the columns; curved ones need them.
         guard let buffer = device.makeBuffer(
-            bytes: vertices,
-            length: MemoryLayout<SIMD4<Float>>.stride * vertices.count,
+            length: MemoryLayout<SIMD4<Float>>.stride * Self.meshVertexCount * 2,
             options: .storageModeShared
         ) else { return nil }
         vertexBuffer = buffer
@@ -211,7 +210,23 @@ final class Renderer: NSObject, MTKViewDelegate {
             let aspect = Float(eyeWidth / height)
 
             let contentAspect = Float(texture.width) / Float(texture.height)
-            let model = screen.modelMatrix(aspect: contentAspect)
+            let model = screen.anchorRotation()
+
+            // Rebuild the screen surface: alternating bottom/top vertices per
+            // column form one triangle strip across the (possibly curved)
+            // surface, positions in the anchor's local frame.
+            let mesh = vertexBuffer.contents().bindMemory(
+                to: SIMD4<Float>.self, capacity: Self.meshVertexCount * 2)
+            for column in 0...Self.meshColumns {
+                let u = Float(column) / Float(Self.meshColumns)
+                let bottom = screen.surfacePoint(u: u, v: 1, aspect: contentAspect)
+                let top = screen.surfacePoint(u: u, v: 0, aspect: contentAspect)
+                let base = column * 4
+                mesh[base + 0] = SIMD4(bottom.x, bottom.y, bottom.z, 1)
+                mesh[base + 1] = SIMD4(u, 1, 0, 0)
+                mesh[base + 2] = SIMD4(top.x, top.y, top.z, 1)
+                mesh[base + 3] = SIMD4(u, 0, 0, 0)
+            }
 
             // Convert the quoted diagonal FOV into the vertical one Metal wants.
             let diagonalTangent = tan(Self.diagonalFOV / 2)
@@ -229,21 +244,26 @@ final class Renderer: NSObject, MTKViewDelegate {
             renderedWidth = Float(eyeWidth) * extent.x
                 / (screen.distance * 2 * tan(fovY / 2) * aspect)
 
-            // The cursor quad lives on the same plane as the screen quad, at
-            // the mouse's fractional position. Local plane coordinates run
-            // x = 2u−1, y = 1−2v (v is top-left like the texture).
+            // The cursor quad sits on the same surface as the screen, at the
+            // mouse's fractional position — its corners go through the same
+            // surface mapping, so it follows the curvature too.
             var cursorVertices: [SIMD4<Float>]?
             if let position = cursorPosition?(), cursorTexture != nil {
                 let u0 = position.x - cursorHotspotFraction.x
                 let v0 = position.y - cursorHotspotFraction.y
                 let u1 = u0 + cursorFraction.x
                 let v1 = v0 + cursorFraction.y
-                cursorVertices = [
-                    SIMD4(2 * u0 - 1, 1 - 2 * v1, 0, 1),
-                    SIMD4(2 * u1 - 1, 1 - 2 * v1, 1, 1),
-                    SIMD4(2 * u0 - 1, 1 - 2 * v0, 0, 0),
-                    SIMD4(2 * u1 - 1, 1 - 2 * v0, 1, 0),
-                ]
+                // Nudged toward the viewer so it never z-fights the screen.
+                let corners = [
+                    (u0, v1, SIMD2<Float>(0, 1)),
+                    (u1, v1, SIMD2<Float>(1, 1)),
+                    (u0, v0, SIMD2<Float>(0, 0)),
+                    (u1, v0, SIMD2<Float>(1, 0)),
+                ].flatMap { (u, v, uv) -> [SIMD4<Float>] in
+                    let p = screen.surfacePoint(u: u, v: v, aspect: contentAspect) * 0.995
+                    return [SIMD4(p.x, p.y, p.z, 1), SIMD4(uv.x, uv.y, 0, 0)]
+                }
+                cursorVertices = corners
             }
 
             let eyes: [(offset: Float, originX: Double)] = stereo
@@ -265,12 +285,13 @@ final class Renderer: NSObject, MTKViewDelegate {
                 encoder.setRenderPipelineState(pipeline)
                 encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
                 encoder.setFragmentTexture(texture, index: 0)
-                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0,
+                                       vertexCount: Self.meshVertexCount)
 
                 if let cursorVertices, let cursorTexture {
                     encoder.setRenderPipelineState(cursorPipeline)
                     encoder.setVertexBytes(cursorVertices,
-                                           length: MemoryLayout<SIMD4<Float>>.stride * 4,
+                                           length: MemoryLayout<SIMD4<Float>>.stride * cursorVertices.count,
                                            index: 0)
                     encoder.setFragmentTexture(cursorTexture, index: 0)
                     encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)

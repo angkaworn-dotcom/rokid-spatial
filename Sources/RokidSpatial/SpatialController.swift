@@ -33,6 +33,7 @@ final class SpatialController: ObservableObject {
     @Published var distance: Float = 2.5 { didSet { screen.distance = distance; persist(distance, "distance") } }
     @Published var diagonal: Float = 1.5 { didSet { screen.diagonal = diagonal; persist(diagonal, "diagonal") } }
     @Published var height: Float = 0 { didSet { screen.verticalOffset = height; persist(height, "height") } }
+    @Published var curved = false { didSet { screen.curved = curved; persist(curved, "curved") } }
     @Published var deadzone: Float = 6 { didSet { screen.deadzoneDegrees = deadzone; persist(deadzone, "deadzone") } }
     @Published var followSpeed: Float = 3.0 { didSet { screen.followSpeed = followSpeed; persist(followSpeed, "followSpeed") } }
     @Published var settleSpeed: Float = 0.7 { didSet { screen.settleSpeed = settleSpeed; persist(settleSpeed, "settleSpeed") } }
@@ -207,6 +208,7 @@ final class SpatialController: ObservableObject {
         }
         if d.object(forKey: "virtualIsMain") != nil { virtualIsMain = d.bool(forKey: "virtualIsMain") }
         if d.object(forKey: "doubleTapRecenter") != nil { doubleTapRecenter = d.bool(forKey: "doubleTapRecenter") }
+        if d.object(forKey: "curved") != nil { curved = d.bool(forKey: "curved") }
 
         func load(_ key: String, into value: inout Float) {
             if d.object(forKey: key) != nil { value = d.float(forKey: key) }
@@ -227,6 +229,7 @@ final class SpatialController: ObservableObject {
         screen.distance = distance
         screen.diagonal = diagonal
         screen.verticalOffset = height
+        screen.curved = curved
         screen.deadzoneDegrees = deadzone
         screen.followSpeed = followSpeed
         screen.settleSpeed = settleSpeed
