@@ -236,14 +236,23 @@ final class DisplayManager {
         let current = CGDisplayCopyDisplayMode(display)
         guard current?.width != width || current?.height != height else { return }
 
-        guard let all = CGDisplayCopyAllDisplayModes(display, nil) as? [CGDisplayMode],
-              let best = all.filter({ $0.width == width && $0.height == height })
-                            .max(by: { $0.refreshRate < $1.refreshRate })
-        else {
-            log?("glasses-only: the glasses offer no \(width)×\(height) mode; staying native")
-            return
+        guard let all = CGDisplayCopyAllDisplayModes(display, nil) as? [CGDisplayMode] else { return }
+        var candidates = all.filter { $0.width == width && $0.height == height }
+        if candidates.isEmpty {
+            // The panel does not offer that exact size — take the nearest
+            // smaller-or-equal 16:10 mode rather than silently staying put.
+            let sameShape = all.filter { $0.width * 10 == $0.height * 16 && $0.width <= 1920 }
+            let nearest = sameShape.min { abs($0.width - width) < abs($1.width - width) }
+            candidates = sameShape.filter { $0.width == nearest?.width }
+            guard !candidates.isEmpty else {
+                log?("glasses-only: no scaled modes at all; staying native")
+                return
+            }
+            log?("glasses-only: no \(width)×\(height) mode; using nearest \(candidates[0].width)×\(candidates[0].height)")
         }
-        log?(String(format: "glasses-only: desktop %d×%d @ %.0f Hz", width, height, best.refreshRate))
+        guard let best = candidates.max(by: { $0.refreshRate < $1.refreshRate }) else { return }
+        log?(String(format: "glasses-only: desktop %d×%d @ %.0f Hz",
+                    best.width, best.height, best.refreshRate))
         try? configure { config in
             CGConfigureDisplayWithDisplayMode(config, display, best, nil)
         }
@@ -257,6 +266,15 @@ final class DisplayManager {
         let width = Int32(CGDisplayPixelsWide(anchor))
         try? configure { config in
             CGConfigureDisplayOrigin(config, display, width, 0)
+        }
+        Thread.sleep(forTimeInterval: 0.5)
+    }
+
+    /// Mirror image of `positionToRight`.
+    func positionToLeft(_ display: CGDirectDisplayID, of anchor: CGDirectDisplayID) {
+        let width = Int32(CGDisplayPixelsWide(display))
+        try? configure { config in
+            CGConfigureDisplayOrigin(config, display, -width, 0)
         }
         Thread.sleep(forTimeInterval: 0.5)
     }

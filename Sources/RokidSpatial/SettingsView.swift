@@ -29,7 +29,7 @@ struct SettingsView: View {
         // An explicit height is required, not a maximum. A ScrollView has no
         // intrinsic height, so `maxHeight` alone lets the hosting window
         // collapse to nothing — which it duly did, to 28 points.
-        .frame(width: 340, height: showAdvanced ? 600 : 410)
+        .frame(width: 340, height: showAdvanced ? 700 : 560)
     }
 
     // MARK: Always visible
@@ -88,9 +88,30 @@ struct SettingsView: View {
             Toggle("Curved screen", isOn: $controller.curved)
                 .font(.caption)
             if controller.source == .glassesOnly {
-                Toggle("Side screen (right)", isOn: $controller.sideScreen)
-                    .font(.caption)
+                labelled("Side screens") {
+                    Picker("", selection: $controller.sideScreens) {
+                        ForEach(SpatialController.SideScreens.allCases) { sides in
+                            Text(sides.label).tag(sides)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
                     .disabled(controller.isRunning)
+                }
+                if controller.sideScreens != .none {
+                    labelled("Side size") {
+                        Picker("", selection: $controller.sideResolution) {
+                            ForEach(SpatialController.VirtualResolution.allCases) { resolution in
+                                Text(resolution.label).tag(resolution)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .disabled(controller.isRunning)
+                    }
+                    slider("Gap", value: $controller.screenGap,
+                           range: 0...10, unit: "°", format: "%.0f")
+                }
             }
         }
     }

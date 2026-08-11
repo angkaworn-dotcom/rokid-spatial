@@ -51,7 +51,12 @@ final class VirtualDisplay {
     /// `hiDPI` asks macOS to treat it as a Retina display, backing each point
     /// with two pixels. That is worth having when the virtual screen is
     /// rendered larger than the display's point size, and wasteful otherwise.
-    func create(width: Int, height: Int, hiDPI: Bool, refreshRate: Double = 60) throws {
+    ///
+    /// `identity` must be unique among displays that exist at the same time —
+    /// the window server rejects a second display with the same serial. Keep
+    /// it stable per role so macOS remembers each display's arrangement.
+    func create(width: Int, height: Int, hiDPI: Bool, refreshRate: Double = 60,
+                identity: UInt32 = 1) throws {
         guard Self.isSupported else { throw VirtualDisplayError.unavailable }
         destroy()
 
@@ -68,7 +73,7 @@ final class VirtualDisplay {
         )
         descriptor.productID = 0x1234
         descriptor.vendorID = 0x3456
-        descriptor.serialNum = 0x0001
+        descriptor.serialNum = identity
 
         let display = CGVirtualDisplay(descriptor: descriptor)
 
