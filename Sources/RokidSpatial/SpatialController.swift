@@ -21,9 +21,6 @@ final class SpatialController: ObservableObject {
     /// Apps whose windows are hidden underneath the overlay on the glasses.
     @Published var strandedApps: [String] = []
 
-    /// Panel mode. 120 Hz is monocular and 90 Hz is stereo — see
-    /// `PanelMode` for why 120 Hz is the better default.
-    @Published var panelMode: PanelMode = .smooth120 { didSet { persist(panelMode.rawValue, "panelMode") } }
     @Published var virtualResolution: VirtualResolution = .r1440x900 { didSet { persist(virtualResolution.rawValue, "virtualResolution") } }
 
     /// Put the menu bar on the virtual desktop, so the glasses become the
@@ -177,45 +174,16 @@ final class SpatialController: ObservableObject {
     /// Built-in panel brightness before glasses-only mode dimmed it to zero.
     private var savedBrightness: Float?
 
-    /// The two panel modes worth using.
+    /// The panel always runs 1920×1200 @ 120 Hz (mode 3).
     ///
-    /// They deliver the same 1920×1200 per eye, so the choice is purely
-    /// refresh rate against stereo depth. At a 2.5 m screen distance the
-    /// stereo disparity is only about 1.4°, which is barely perceptible,
-    /// while 120 Hz against 90 Hz is obvious the moment you turn your head.
-    /// Hence 120 Hz as the default.
-    enum PanelMode: String, CaseIterable, Identifiable {
-        case smooth120
-        case stereo90
-
-        var id: String { rawValue }
-
-        var label: String {
-            switch self {
-            case .smooth120: return "120 Hz"
-            case .stereo90: return "90 Hz + depth"
-            }
-        }
-
-        var detail: String {
-            switch self {
-            case .smooth120:
-                return "1920×1200 per eye at 120 Hz. Both eyes see the same image, so screen distance changes apparent size only."
-            case .stereo90:
-                return "3840×1200 side-by-side at 90 Hz. Adds real stereo depth, but the effect is subtle beyond about 2 m."
-            }
-        }
-
-        var displayMode: DisplayMode {
-            switch self {
-            case .smooth120: return .highRefreshRate
-            case .stereo90: return .highRefreshRateSBS
-            }
-        }
-
-        var isStereo: Bool { self == .stereo90 }
-        var frameRate: Int { self == .smooth120 ? 120 : 90 }
-    }
+    /// A 90 Hz side-by-side stereo mode existed and was removed after real
+    /// use. The disparity at a 2.5 m screen distance is only about 1.4° —
+    /// barely perceptible — while 120 against 90 Hz is obvious the moment
+    /// you turn your head, and in glasses-only mode SBS additionally forces
+    /// the whole desktop to 3840×1200, halving per-eye sharpness. The stereo
+    /// render path (`Renderer.stereo`, `VirtualScreen.ipd`) survives in case
+    /// it ever earns its way back; the protocol side stays in PROTOCOL.md.
+    static let frameRate = 120
 
     // MARK: Persistence
 
@@ -230,7 +198,6 @@ final class SpatialController: ObservableObject {
     init() {
         let d = UserDefaults.standard
         if let v = CaptureSource(rawValue: d.string(forKey: "source") ?? "") { source = v }
-        if let v = PanelMode(rawValue: d.string(forKey: "panelMode") ?? "") { panelMode = v }
         if let v = VirtualResolution(rawValue: d.string(forKey: "virtualResolution") ?? "") {
             virtualResolution = v
         }
@@ -307,8 +274,8 @@ final class SpatialController: ObservableObject {
             }
         }
 
-        let displayMode = panelMode.displayMode
-        setStatus("Switching the glasses to \(panelMode.label)…")
+        let displayMode = DisplayMode.highRefreshRate
+        setStatus("Switching the glasses to 120 Hz…")
 
         // Display reconfiguration blocks for a few seconds while the panel
         // renegotiates, so keep it off the main thread.
@@ -368,7 +335,7 @@ final class SpatialController: ObservableObject {
             abort("Could not create the Metal renderer.")
             return
         }
-        renderer.stereo = panelMode.isStereo
+        renderer.stereo = false
         renderer.lookAhead = lookAhead
         self.renderer = renderer
 
@@ -386,7 +353,7 @@ final class SpatialController: ObservableObject {
         do {
             try await capture.start(
                 displayID: captureID,
-                frameRate: panelMode.frameRate,
+                frameRate: Self.frameRate,
                 excludingWindowNumber: source == .glassesOnly ? window?.windowNumber : nil,
                 // In glasses-only mode the renderer draws its own cursor;
                 // SCK's would be a duplicate whenever the system cursor
@@ -410,7 +377,7 @@ final class SpatialController: ObservableObject {
         isStarting = false
         let size = displays.glassesPixelSize
         setStatus(String(format: "Running — %.0f×%.0f @ %d Hz",
-                         size.width, size.height, panelMode.frameRate))
+                         size.width, size.height, Self.frameRate))
         startRateTimer()
 
         // Last, after everything is confirmed running: glasses-only mode's
@@ -538,7 +505,7 @@ final class SpatialController: ObservableObject {
             do {
                 try await self.capture.start(
                     displayID: captureID,
-                    frameRate: self.panelMode.frameRate,
+                    frameRate: Self.frameRate,
                     excludingWindowNumber: self.source == .glassesOnly
                         ? self.window?.windowNumber : nil
                 )
@@ -667,7 +634,7 @@ final class SpatialController: ObservableObject {
                            device: renderer.device)
         view.colorPixelFormat = .bgra8Unorm
         view.framebufferOnly = true
-        view.preferredFramesPerSecond = panelMode.frameRate
+        view.preferredFramesPerSecond = Self.frameRate
         view.enableSetNeedsDisplay = false
         view.isPaused = false
         view.delegate = renderer

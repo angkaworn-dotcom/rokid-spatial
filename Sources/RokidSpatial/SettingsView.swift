@@ -29,7 +29,7 @@ struct SettingsView: View {
         // An explicit height is required, not a maximum. A ScrollView has no
         // intrinsic height, so `maxHeight` alone lets the hosting window
         // collapse to nothing — which it duly did, to 28 points.
-        .frame(width: 340, height: showAdvanced ? 645 : 455)
+        .frame(width: 340, height: showAdvanced ? 600 : 410)
     }
 
     // MARK: Always visible
@@ -62,17 +62,6 @@ struct SettingsView: View {
                 Picker("", selection: $controller.source) {
                     ForEach(SpatialController.CaptureSource.allCases) { source in
                         Text(source.label).tag(source)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .disabled(controller.isRunning)
-            }
-
-            labelled("Panel") {
-                Picker("", selection: $controller.panelMode) {
-                    ForEach(SpatialController.PanelMode.allCases) { mode in
-                        Text(mode.label).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -154,11 +143,6 @@ struct SettingsView: View {
                        range: 0...1, unit: "", format: "%.2f")
                 slider("Prediction", value: $controller.lookAhead,
                        range: 0...0.050, unit: "s", format: "%.3f")
-
-                if controller.panelMode.isStereo {
-                    slider("Eye separation", value: $controller.ipd,
-                           range: 0.050...0.076, unit: "m", format: "%.3f")
-                }
 
                 Text("⌃⌥Esc stop · ⌃⌥R centre · ⌃⌥C calibrate\n⌃⌥- ⌃⌥= distance · ⌃⌥[ ⌃⌥] size · ⌃⌥↑ ⌃⌥↓ height")
                     .font(.system(.caption2, design: .monospaced))

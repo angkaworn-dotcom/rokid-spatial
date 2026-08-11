@@ -67,27 +67,23 @@ goes wrong.
 - **Reads the glasses' IMU directly** over their vendor HID interface at
   ~440 Hz, and fuses it into a head-orientation estimate
 - **Unlocks 1920×1200 @ 120 Hz**, double the default 1080p60 refresh rate at
-  higher resolution — or 3840×1200 @ 90 Hz side-by-side if you want real
-  stereo depth instead
+  higher resolution
 - **Renders the desktop as a virtual screen in space**, in two modes:
   - *smooth follow* — the screen trails your head with a deadzone, so small
     movements don't move it and large ones bring it along
   - *world-anchored* — the screen stays put in the room while you look around
-- **Adjustable screen distance and size**, plus stereo disparity in SBS mode
+- **Adjustable screen distance, size and height**
 
-### Which panel mode?
+### Why no stereo mode?
 
-| | resolution | refresh | stereo |
-|---|---|---|---|
-| **120 Hz** (default) | 1920×1200 per eye | 120 Hz | no |
-| 90 Hz + depth | 1920×1200 per eye | 90 Hz | yes |
-
-Same pixels per eye either way, so it comes down to refresh rate against
-stereo depth. At a 2.5 m screen distance the disparity between the eyes is
-about 1.4°, which is barely perceptible, while the difference between 90 and
-120 Hz is obvious the moment you turn your head. Hence the default. The 120 Hz
-mode also sends both eyes the same image, which sidesteps eye-fusion
-discomfort entirely.
+The panel also supports 3840×1200 @ 90 Hz side-by-side, and an earlier
+version exposed it. It was removed after real use: the disparity at a 2.5 m
+screen distance is only about 1.4° — barely perceptible — while 120 against
+90 Hz is obvious the moment you turn your head, and in glasses-only mode SBS
+forces the whole desktop to 3840×1200, which halves per-eye sharpness. Three
+losses, no felt gain. The stereo render path survives in the code and the
+protocol side is documented in [PROTOCOL.md](PROTOCOL.md), should it ever
+earn its way back.
 
 ## Status
 
