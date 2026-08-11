@@ -130,6 +130,8 @@ struct SettingsView: View {
                 Button("Fit for sharpness") { controller.fitForSharpness() }
                     .disabled(!controller.isRunning)
 
+                Toggle("Double-tap glasses to re-centre", isOn: $controller.doubleTapRecenter)
+
                 if controller.mode == .follow {
                     slider("Deadzone", value: $controller.deadzone,
                            range: 0...45, unit: "°", format: "%.0f")

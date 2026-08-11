@@ -6,8 +6,17 @@ Findings from reading `wheaney/XRLinuxDriver` and `wheaney/breezy-desktop`
 
 ## Look-ahead, done the way that does not jitter
 
-Status: **deferred** — at 120 Hz in glasses-only mode the user judged blur
-acceptable without it. Revisit if that changes.
+Status: **tried and rejected** — a faithful port lives on the
+`breezy-lookahead` branch and the user judged it "กระตุกไม่นิ่งเลย"
+(stuttery, not steady), consistent with every earlier prediction attempt on
+this hardware. Likely root cause: breezy differentiates *hardware-fused*
+50 Hz pose snapshots that are heavily smoothed on-device, while our software
+fusion at 440 Hz keeps more high-frequency content, so even pose-differenced
+velocity carries jitter that a ~25 ms extrapolation amplifies. Any future
+attempt should start from much heavier velocity smoothing (τ ≥ 100 ms) or a
+constant-velocity Kalman state, not from re-porting the shader math — the
+port itself is done and correct on the branch (two MVPs blended per vertex
+for the 8 ms scanline ramp, cursor pinned to its own scanline).
 
 Our earlier prediction attempt jittered and was defaulted off. Breezy's does
 not, and the differences are exactly the lessons:

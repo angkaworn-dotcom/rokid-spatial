@@ -39,6 +39,10 @@ final class SpatialController: ObservableObject {
     @Published var ipd: Float = 0.063 { didSet { screen.ipd = ipd; persist(ipd, "ipd") } }
     @Published var lookAhead: Float = 0 { didSet { renderer?.lookAhead = lookAhead; persist(lookAhead, "lookAhead") } }
     @Published var motionLock: Float = 0 { didSet { screen.motionLock = motionLock; persist(motionLock, "motionLock") } }
+    /// Physically tap the glasses twice to re-centre — hands never leave the
+    /// keyboard, eyes never leave the glasses. Detection is a sharp spike in
+    /// the gyro's derivative (ported from XRLinuxDriver's multitap).
+    @Published var doubleTapRecenter = false { didSet { persist(doubleTapRecenter, "doubleTapRecenter") } }
 
     /// Panel pixels per captured pixel across the virtual screen. 1.0 means
     /// the desktop maps one-to-one; below that, detail is being thrown away
@@ -202,6 +206,7 @@ final class SpatialController: ObservableObject {
             virtualResolution = v
         }
         if d.object(forKey: "virtualIsMain") != nil { virtualIsMain = d.bool(forKey: "virtualIsMain") }
+        if d.object(forKey: "doubleTapRecenter") != nil { doubleTapRecenter = d.bool(forKey: "doubleTapRecenter") }
 
         func load(_ key: String, into value: inout Float) {
             if d.object(forKey: key) != nil { value = d.float(forKey: key) }
@@ -603,10 +608,16 @@ final class SpatialController: ObservableObject {
     // MARK: Pieces
 
     private func startIMU() {
+        let tapDetector = TapDetector(sampleRate: 440)
         let imu = RokidIMU { [weak self] sample in
             guard let self else { return }
             self.filter.update(sample)
             self.samplesThisSecond += 1
+            if self.doubleTapRecenter,
+               tapDetector.update(gyro: sample.gyro, timestamp: sample.timestamp) == 2 {
+                NSLog("RokidSpatial: double-tap — recentring")
+                self.recenter()
+            }
         }
         do {
             try imu.start(on: CFRunLoopGetMain())
