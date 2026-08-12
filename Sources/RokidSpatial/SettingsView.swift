@@ -41,10 +41,12 @@ struct SettingsView: View {
                 .foregroundStyle(controller.statusIsError ? Color.red : .secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if controller.isRunning {
-                Text(String(format: "%d Hz · yaw %+.1f° · sharp %.2f×",
-                            controller.sampleRate, controller.yaw, controller.pixelScale))
+                Text(String(format: "%d Hz · yaw %+.1f° · sharp %.2f× · %d fps (%d slow)",
+                            controller.sampleRate, controller.yaw, controller.pixelScale,
+                            controller.renderFPS, controller.longFrames))
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(controller.pixelScale < 0.95 ? Color.orange : .secondary)
+                    .foregroundStyle(controller.pixelScale < 0.95 || controller.longFrames > 6
+                                     ? Color.orange : .secondary)
             }
 
             if !controller.strandedApps.isEmpty {

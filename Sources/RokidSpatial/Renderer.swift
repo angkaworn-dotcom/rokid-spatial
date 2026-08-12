@@ -121,6 +121,61 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var lastDrawTime = CFAbsoluteTimeGetCurrent()
     private var cursorDrawLogged = false
 
+    /// Frame-pacing counters, read and reset once a second by the status
+    /// display. A "long" frame overshot the 120 Hz deadline by half a frame —
+    /// exactly the hiccups that read as stutter in the glasses. Written on
+    /// the render thread, read from the main thread, hence the lock.
+    private let statsLock = NSLock()
+    private var framesDrawn = 0
+    private var longFrames = 0
+
+    func takeFrameStats() -> (drawn: Int, long: Int) {
+        statsLock.lock()
+        defer { framesDrawn = 0; longFrames = 0; statsLock.unlock() }
+        return (framesDrawn, longFrames)
+    }
+
+    // MARK: Render loop
+
+    /// Rendering runs on CVDisplayLink's dedicated thread, paced by the
+    /// *glasses* display. Two separate problems made the default main-thread
+    /// MTKView loop deliver only 40–65 fps of a 120 fps target: the main
+    /// thread is busy (UI, timers, IMU at 440 Hz all compete with an 8.3 ms
+    /// deadline), and in a mirror set the view's implicit pacing can latch
+    /// onto the 60 Hz built-in member instead of the 120 Hz panel.
+    private var displayLink: CVDisplayLink?
+    private weak var linkedView: MTKView?
+
+    func startRenderLoop(displayID: CGDirectDisplayID, view: MTKView) {
+        view.isPaused = true
+        view.enableSetNeedsDisplay = false
+        linkedView = view
+
+        var link: CVDisplayLink?
+        guard CVDisplayLinkCreateWithCGDisplay(displayID, &link) == kCVReturnSuccess,
+              let link else {
+            // No link, no dedicated thread — fall back to MTKView's own loop.
+            view.isPaused = false
+            return
+        }
+        CVDisplayLinkSetOutputHandler(link) { [weak self] _, _, _, _, _ in
+            // MTKView supports manual drawing from a non-main thread when
+            // paused with setNeedsDisplay disabled — which is this.
+            self?.linkedView?.draw()
+            return kCVReturnSuccess
+        }
+        CVDisplayLinkStart(link)
+        displayLink = link
+    }
+
+    func stopRenderLoop() {
+        if let displayLink { CVDisplayLinkStop(displayLink) }
+        displayLink = nil
+        linkedView = nil
+    }
+
+    deinit { stopRenderLoop() }
+
     /// Set false to fall back to a single centred view, e.g. if SBS is off.
     var stereo = true
 
@@ -242,6 +297,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         let now = CFAbsoluteTimeGetCurrent()
         let dt = Float(now - lastDrawTime)
         lastDrawTime = now
+        statsLock.lock()
+        framesDrawn += 1
+        if dt > 1.5 / 120 { longFrames += 1 }
+        statsLock.unlock()
 
         let head = filter.predictedRelativeOrientation(lookAhead: lookAhead)
         screen.update(head: head, dt: dt,

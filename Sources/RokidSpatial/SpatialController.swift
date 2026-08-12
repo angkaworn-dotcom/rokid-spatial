@@ -15,6 +15,10 @@ final class SpatialController: ObservableObject {
     @Published var statusIsError = false
     @Published var sampleRate = 0
     @Published var yaw: Float = 0
+    /// Rendered frames in the last second, and how many overshot the 120 Hz
+    /// deadline — the stutter metric.
+    @Published var renderFPS = 0
+    @Published var longFrames = 0
     /// Non-nil while a gyro calibration is running.
     @Published var calibrationEndsAt: Date?
 
@@ -87,7 +91,7 @@ final class SpatialController: ObservableObject {
     /// Physically tap the glasses twice to re-centre — hands never leave the
     /// keyboard, eyes never leave the glasses. Detection is a sharp spike in
     /// the gyro's derivative (ported from XRLinuxDriver's multitap).
-    @Published var doubleTapRecenter = false { didSet { persist(doubleTapRecenter, "doubleTapRecenter") } }
+    @Published var doubleTapRecenter = false { didSet { tapEnabled.set(doubleTapRecenter); persist(doubleTapRecenter, "doubleTapRecenter") } }
 
     /// Panel pixels per captured pixel across the virtual screen. 1.0 means
     /// the desktop maps one-to-one; below that, detail is being thrown away
@@ -177,8 +181,11 @@ final class SpatialController: ObservableObject {
     private var window: NSWindow?
     private var metalView: MTKView?
 
-    private var samplesThisSecond = 0
+    private let sampleCounter = Counter()
+    private let tapEnabled = Flag()
+    private let imuLoop = RunLoopHandle()
     private var rateTimer: Timer?
+    private var pacingWindow: [(drawn: Int, long: Int)] = []
 
     /// Re-hides the hardware cursor at 10 Hz while glasses-only mode runs —
     /// any app changing the cursor shape makes it visible again.
@@ -756,8 +763,19 @@ final class SpatialController: ObservableObject {
         cursorTimer = nil
         rateTimer?.invalidate()
         rateTimer = nil
-        imu?.stop()
+        if let loop = imuLoop.get(), let imu {
+            // Stop the device on the thread it is scheduled on, then let the
+            // run loop wind down and end the thread.
+            CFRunLoopPerformBlock(loop, CFRunLoopMode.defaultMode.rawValue) {
+                imu.stop()
+                CFRunLoopStop(CFRunLoopGetCurrent())
+            }
+            CFRunLoopWakeUp(loop)
+        } else {
+            imu?.stop()
+        }
         imu = nil
+        renderer?.stopRenderLoop()
         metalView?.isPaused = true
         metalView?.delegate = nil
         metalView = nil
@@ -773,27 +791,75 @@ final class SpatialController: ObservableObject {
         // For threshold tuning, set `tapDetector.debugLog` here — one line a
         // second of peak-vs-threshold telemetry. The values in RESEARCH.md
         // were measured that way.
+        // Everything the callback touches is thread-safe: the filter locks
+        // internally, the counter and flag are locked boxes, and re-centre
+        // hops back to the main actor.
+        let filter = self.filter
+        let counter = self.sampleCounter
+        let tapEnabled = self.tapEnabled
         let imu = RokidIMU { [weak self] sample in
-            guard let self else { return }
-            self.filter.update(sample)
-            self.samplesThisSecond += 1
-            if self.doubleTapRecenter,
+            filter.update(sample)
+            counter.increment()
+            if tapEnabled.get(),
                tapDetector.update(gyro: sample.gyro, accel: sample.accel,
                                   timestamp: sample.timestamp) == 2 {
                 NSLog("RokidSpatial: double-tap — recentring")
-                self.recenter()
+                DispatchQueue.main.async { self?.recenter() }
             }
         }
-        do {
-            try imu.start(on: CFRunLoopGetMain())
-            self.imu = imu
-            // Let the filter settle before treating the current pose as forward.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { [weak self] in
-                self?.recenter()
+
+        // A dedicated thread for the 440 Hz HID stream. On the main run loop
+        // those callbacks competed with the renderer's 8.3 ms deadline; here
+        // they cost the main thread nothing.
+        let imuLoop = self.imuLoop
+        let thread = Thread { [weak self] in
+            do {
+                try imu.start(on: CFRunLoopGetCurrent())
+            } catch {
+                DispatchQueue.main.async { self?.setStatus("\(error)", isError: true) }
+                return
             }
-        } catch {
-            setStatus("\(error)", isError: true)
+            imuLoop.set(CFRunLoopGetCurrent())
+            CFRunLoopRun()
         }
+        thread.name = "imu"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        self.imu = imu
+
+        // Let the filter settle before treating the current pose as forward.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { [weak self] in
+            self?.recenter()
+        }
+    }
+
+    /// Thread-safe IMU sample counter — incremented on the IMU thread, read
+    /// once a second on the main thread.
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        func increment() { lock.lock(); value += 1; lock.unlock() }
+        func take() -> Int {
+            lock.lock()
+            defer { value = 0; lock.unlock() }
+            return value
+        }
+    }
+
+    /// Thread-safe mirror of a settings flag, readable from the IMU thread.
+    private final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+        func set(_ newValue: Bool) { lock.lock(); value = newValue; lock.unlock() }
+        func get() -> Bool { lock.lock(); defer { lock.unlock() }; return value }
+    }
+
+    /// Hands the IMU thread's run loop back to the main thread for teardown.
+    private final class RunLoopHandle: @unchecked Sendable {
+        private let lock = NSLock()
+        private var loop: CFRunLoop?
+        func set(_ newLoop: CFRunLoop) { lock.lock(); loop = newLoop; lock.unlock() }
+        func get() -> CFRunLoop? { lock.lock(); defer { lock.unlock() }; return loop }
     }
 
     private func createOverlayWindow(renderer: Renderer) {
@@ -844,15 +910,34 @@ final class SpatialController: ObservableObject {
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
         window.orderFrontRegardless()
         self.window = window
+
+        // Rendering runs on a dedicated thread paced by the glasses display —
+        // see Renderer.startRenderLoop for the two problems this solves.
+        if let glassesID = displays.glassesDisplayID {
+            renderer.startRenderLoop(displayID: glassesID, view: view)
+        }
     }
 
     private func startRateTimer() {
         rateTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.sampleRate = self.samplesThisSecond
-                self.samplesThisSecond = 0
+                self.sampleRate = self.sampleCounter.take()
                 self.yaw = self.filter.yawDegrees
+                if let renderer = self.renderer {
+                    let stats = renderer.takeFrameStats()
+                    self.renderFPS = stats.drawn
+                    self.longFrames = stats.long
+                    // One log line every 10 s — enough history to compare
+                    // pacing before and after pipeline changes.
+                    self.pacingWindow.append(stats)
+                    if self.pacingWindow.count >= 10 {
+                        let drawn = self.pacingWindow.map(\.drawn).reduce(0, +)
+                        let long = self.pacingWindow.map(\.long).reduce(0, +)
+                        Self.appendLog("pacing: \(drawn / 10) fps avg, \(long) slow frames in 10 s")
+                        self.pacingWindow.removeAll()
+                    }
+                }
                 // One display in glasses-only mode — nowhere to get stranded.
                 self.strandedApps = self.source == .glassesOnly
                     ? [] : self.displays.strandedWindowOwners()

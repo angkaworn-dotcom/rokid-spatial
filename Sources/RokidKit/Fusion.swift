@@ -17,6 +17,11 @@ import Foundation
 import simd
 
 public final class OrientationFilter {
+    /// Guards every piece of mutable state. The filter is written from the
+    /// IMU thread at ~440 Hz and read from the render thread at 120 Hz;
+    /// both operations are microseconds, so one lock is plenty.
+    private let lock = NSLock()
+
     /// Current orientation, device frame → world frame. World +Y is up.
     public private(set) var orientation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
 
@@ -75,6 +80,8 @@ public final class OrientationFilter {
 
     /// Treat wherever the head is pointing right now as straight ahead.
     public func recenter() {
+        lock.lock()
+        defer { lock.unlock() }
         reference = orientation
     }
 
@@ -83,7 +90,9 @@ public final class OrientationFilter {
 
     /// Orientation relative to the last `recenter()`.
     public var relativeOrientation: simd_quatf {
-        (reference.inverse * orientation).normalized
+        lock.lock()
+        defer { lock.unlock() }
+        return (reference.inverse * orientation).normalized
     }
 
     /// Where the head will be `lookAhead` seconds from now, relative to the
@@ -97,8 +106,12 @@ public final class OrientationFilter {
     /// look-ahead overshoots and the image jitters, so this stays small.
     public func predictedRelativeOrientation(lookAhead: Float) -> simd_quatf {
         guard lookAhead > 0 else { return relativeOrientation }
+        lock.lock()
+        defer { lock.unlock() }
         let speed = simd_length(angularVelocity)
-        guard speed > 1e-4 else { return relativeOrientation }
+        guard speed > 1e-4 else {
+            return (reference.inverse * orientation).normalized
+        }
 
         let axis = angularVelocity / speed
         let step = simd_quatf(angle: speed * lookAhead, axis: axis)
@@ -107,6 +120,8 @@ public final class OrientationFilter {
     }
 
     public func update(_ sample: IMUSample) {
+        lock.lock()
+        defer { lock.unlock() }
         let accelMagnitude = simd_length(sample.accel)
 
         // Seed the filter from the first usable gravity reading, so we start
@@ -187,7 +202,9 @@ public final class OrientationFilter {
     /// the one angle gravity lets us define unambiguously, so it is the only
     /// one derived rather than read off the device axes.
     public var yawDegrees: Float {
-        let q = relativeOrientation
+        lock.lock()
+        let q = (reference.inverse * orientation).normalized
+        lock.unlock()
         let up = SIMD3<Float>(0, 1, 0)
         // Swing-twist decomposition: keep only the component about `up`.
         let projected = simd_dot(q.imag, up) * up
