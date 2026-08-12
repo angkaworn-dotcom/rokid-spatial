@@ -93,6 +93,15 @@ final class SpatialController: ObservableObject {
     /// whenever the head moves and the desktop's pixel rows beat against the
     /// panel raster. Live-switchable so the difference can be judged by eye.
     @Published var antiMoire = false { didSet { renderer?.antiMoire = antiMoire; persist(antiMoire, "antiMoire") } }
+    /// Station-2-style SBS: panel mode 4 (3840×1200 @ 90 Hz), stereo per-eye
+    /// rendering with the IPD offset, and a 1920×1200 @ 90 Hz virtual display
+    /// as the working desktop. Opt-in, and only meaningful with `.glassesOnly`.
+    /// Eye-tested 2026-08-12: the 90 Hz mode is free of the 120 Hz mode's
+    /// grey-line artifact.
+    @Published var sbs90 = false { didSet { persist(sbs90, "sbs90") } }
+
+    /// True when the session runs (or would run) the SBS-90 pipeline.
+    var sbsActive: Bool { source == .glassesOnly && sbs90 }
     @Published var motionLock: Float = 0 { didSet { screen.motionLock = motionLock; persist(motionLock, "motionLock") } }
     /// Angular gap between neighbouring screens, degrees. Zero makes the
     /// three screens one continuous wall.
@@ -256,22 +265,11 @@ final class SpatialController: ObservableObject {
     /// as a fault and tore the session down for good.
     private var resumeOnWake = false
 
-    /// The panel always runs 1920×1200 @ 120 Hz (mode 3).
-    ///
-    /// A 90 Hz side-by-side stereo mode existed and was removed after real
-    /// use. The disparity at a 2.5 m screen distance is only about 1.4° —
-    /// barely perceptible — while 120 against 90 Hz is obvious the moment
-    /// you turn your head, and in glasses-only mode SBS additionally forces
-    /// the whole desktop to 3840×1200, halving per-eye sharpness. The stereo
-    /// render path (`Renderer.stereo`, `VirtualScreen.ipd`) survives in case
-    /// it ever earns its way back; the protocol side stays in PROTOCOL.md.
-    ///
-    /// 120 Hz (mode 3) is retired on the Mac after a day of chasing it: the
-    /// mode shows faint grey lines on motion (a timing-negotiation problem
-    /// per RESEARCH.md), and macOS harmonizes mirror sets to 60 anyway. The
-    /// panel runs mode 0 — 1920×1080 @ 60 Hz, 1:1 with the render loop.
-    /// 120 Hz lives on in the Windows port plan (PORTING.md).
-    private let frameRate = 60
+    /// 60 Hz mode-0 is the daily driver: clean image, 1:1 pacing (the 120 Hz
+    /// mode shows faint grey lines on motion — a timing-negotiation problem
+    /// per RESEARCH.md — and is parked for the Windows port). SBS-90 opt-in
+    /// runs panel mode 4 at 90 Hz, which the same eye test cleared.
+    private var frameRate: Int { sbsActive ? 90 : 60 }
 
     // MARK: Persistence
 
@@ -293,6 +291,7 @@ final class SpatialController: ObservableObject {
         if d.object(forKey: "doubleTapRecenter") != nil { doubleTapRecenter = d.bool(forKey: "doubleTapRecenter") }
         if d.object(forKey: "curved") != nil { curved = d.bool(forKey: "curved") }
         if d.object(forKey: "antiMoire") != nil { antiMoire = d.bool(forKey: "antiMoire") }
+        if d.object(forKey: "sbs90") != nil { sbs90 = d.bool(forKey: "sbs90") }
         if let v = SideScreens(rawValue: d.string(forKey: "sideScreens") ?? "") {
             sideScreens = v
         }

@@ -106,6 +106,15 @@ struct SettingsView: View {
                     slider("Gap", value: $controller.screenGap,
                            range: 0...10, unit: "°", format: "%.0f")
                 }
+                Toggle("SBS 90 Hz (stereo)", isOn: $controller.sbs90)
+                    .font(.caption)
+                    .disabled(controller.isRunning)
+                if controller.sbs90 {
+                    Text("Panel mode 4: 1920×1200 per eye @ 90 Hz on a separate working desktop. Eye separation is the IPD slider under More. The MacBook screen goes dark and unmirrored.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
