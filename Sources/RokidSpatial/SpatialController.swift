@@ -84,6 +84,8 @@ final class SpatialController: ObservableObject {
     @Published var settleSpeed: Float = 0.7 { didSet { screen.settleSpeed = settleSpeed; persist(settleSpeed, "settleSpeed") } }
     @Published var ipd: Float = 0.063 { didSet { screen.ipd = ipd; persist(ipd, "ipd") } }
     @Published var lookAhead: Float = 0 { didSet { renderer?.lookAhead = lookAhead; persist(lookAhead, "lookAhead") } }
+    /// Anti-shake: display-pose smoothing time constant, seconds.
+    @Published var steady: Float = 0.015 { didSet { renderer?.steady = steady; persist(steady, "steady") } }
     @Published var motionLock: Float = 0 { didSet { screen.motionLock = motionLock; persist(motionLock, "motionLock") } }
     /// Angular gap between neighbouring screens, degrees. Zero makes the
     /// three screens one continuous wall.
@@ -283,6 +285,7 @@ final class SpatialController: ObservableObject {
         load("settleSpeed", into: &settleSpeed)
         load("ipd", into: &ipd)
         load("lookAhead", into: &lookAhead)
+        load("steady", into: &steady)
         load("motionLock", into: &motionLock)
         load("screenGap", into: &screenGap)
 
@@ -444,6 +447,7 @@ final class SpatialController: ObservableObject {
         }
         renderer.stereo = false
         renderer.lookAhead = lookAhead
+        renderer.steady = steady
         renderer.sideGap = screenGap * .pi / 180
         self.renderer = renderer
 

@@ -174,6 +174,8 @@ struct SettingsView: View {
                            range: 0...5, unit: "", format: "%.2f")
                 }
 
+                slider("Stabilizer", value: $controller.steady,
+                       range: 0...0.060, unit: "s", format: "%.3f")
                 slider("Lock while turning", value: $controller.motionLock,
                        range: 0...1, unit: "", format: "%.2f")
                 slider("Prediction", value: $controller.lookAhead,

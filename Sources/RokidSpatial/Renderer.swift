@@ -184,6 +184,14 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// was the more noticeable of the two.
     var lookAhead: Float = 0
 
+    /// Display-side pose smoothing time constant, seconds. Rendering at a
+    /// full 120 fps faithfully reproduces the filter's sub-degree tremor —
+    /// which the old 45 fps loop had been accidentally hiding — so the pose
+    /// used for drawing is eased over the last couple of frames. ~15 ms of
+    /// added latency is imperceptible; the shimmer it removes is not.
+    var steady: Float = 0.015
+    private var steadyHead: simd_quatf?
+
     /// Pixel dimensions of the most recent captured frame.
     private(set) var contentSize = SIMD2<Float>(0, 0)
 
@@ -302,7 +310,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         if dt > 1.5 / 120 { longFrames += 1 }
         statsLock.unlock()
 
-        let head = filter.predictedRelativeOrientation(lookAhead: lookAhead)
+        var head = filter.predictedRelativeOrientation(lookAhead: lookAhead)
+        if steady > 0.0005, dt > 0, dt < 0.5, let previous = steadyHead {
+            head = simd_slerp(previous, head, min(1, dt / steady)).normalized
+        }
+        steadyHead = head
         screen.update(head: head, dt: dt,
                       rotationRate: simd_length(filter.angularVelocity))
 
