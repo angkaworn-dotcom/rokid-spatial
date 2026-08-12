@@ -439,7 +439,36 @@ final class SpatialController: ObservableObject {
                 self.lowPowerMode = active
                 Self.appendLog("power: Low Power Mode \(active ? "ON — reducing capture to protect render pacing" : "off — restoring full capture rate")")
                 self.adaptCaptureToPowerState()
+                // After LPM lifts, the window server sometimes keeps pacing
+                // the old session at ~2/3 rate (seen live: 39 fps on AC
+                // until a restart). Give it ten seconds to recover on its
+                // own, then bounce the session through the hardened
+                // stop/start paths.
+                if !active {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+                        guard let self, self.isRunning,
+                              !ProcessInfo.processInfo.isLowPowerModeEnabled,
+                              self.renderFPS > 0,
+                              self.renderFPS < self.frameRate - 8 else { return }
+                        Self.appendLog("power: pacing stuck at \(self.renderFPS) fps after Low Power Mode lifted — restarting the session")
+                        self.restartSession()
+                    }
+                }
             }
+        }
+    }
+
+    /// Stop and start again through the full hardened paths — the same
+    /// recovery a sleep/wake cycle uses.
+    private func restartSession() {
+        stop()
+        Task {
+            let deadline = Date().addingTimeInterval(20)
+            while isRunning || isStarting, Date() < deadline {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            guard !self.isRunning, !self.isStarting else { return }
+            self.start()
         }
     }
 
