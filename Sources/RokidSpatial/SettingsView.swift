@@ -175,6 +175,11 @@ struct SettingsView: View {
 
                 Toggle("Anti-moiré resample", isOn: $controller.antiMoire)
 
+                if controller.source == .glassesOnly {
+                    Toggle("No mirror (120 Hz experiment)", isOn: $controller.standalone120)
+                        .disabled(controller.isRunning)
+                }
+
                 Button("Fit for sharpness") { controller.fitForSharpness() }
                     .disabled(!controller.isRunning)
 

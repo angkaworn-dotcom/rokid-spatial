@@ -57,6 +57,13 @@ final class SpatialController: ObservableObject {
     /// 90 Hz mode — 90 exists only bundled with SBS.
     @Published var refreshRate = 120 { didSet { persist(refreshRate, "refreshRate") } }
 
+    /// Standalone experiment: run glasses-only *without* mirroring the
+    /// built-in panel. Mirroring is what lets macOS harmonize the flip rate
+    /// down to the 60 Hz member; standalone is the only credible route to
+    /// real 120 Hz flips. Costs: the re-mirror war is back on (watchdog
+    /// re-asserts), and the pointer can wander onto the dark built-in.
+    @Published var standalone120 = false { didSet { persist(standalone120, "standalone120") } }
+
     private static func parseSize(_ label: String) -> (width: Int, height: Int)? {
         let parts = label.split(separator: "×").compactMap { Int($0) }
         guard parts.count == 2 else { return nil }
@@ -300,6 +307,7 @@ final class SpatialController: ObservableObject {
         if let v = d.string(forKey: "desktopSize") { desktopSize = v }
         if let v = d.stringArray(forKey: "desktopSizes") { desktopSizes = v }
         if d.object(forKey: "refreshRate") != nil { refreshRate = d.integer(forKey: "refreshRate") }
+        if d.object(forKey: "standalone120") != nil { standalone120 = d.bool(forKey: "standalone120") }
 
         func load(_ key: String, into value: inout Float) {
             if d.object(forKey: key) != nil { value = d.float(forKey: key) }
@@ -436,10 +444,12 @@ final class SpatialController: ObservableObject {
         // requested size falls back to the nearest one the panel offers.
         let requestedSize = refreshRate == 60 ? nil : Self.parseSize(desktopSize)
 
+        let mirrored = !standalone120
         Task.detached(priority: .userInitiated) { [displays, source] in
             do {
                 if source == .glassesOnly {
-                    try displays.prepareGlassesOnly(mode: displayMode, desktopSize: requestedSize)
+                    try displays.prepareGlassesOnly(mode: displayMode, desktopSize: requestedSize,
+                                                    mirrored: mirrored)
                 } else {
                     // Let macOS enumerate the new display before rearranging.
                     Thread.sleep(forTimeInterval: 2.0)
@@ -501,9 +511,13 @@ final class SpatialController: ObservableObject {
             let effective = displays.glassesDesktopSize
             for index in sideScreens.indices {
                 do {
+                    // Match the panel's rate: a 60 Hz virtual display in the
+                    // set drags the whole composition back down to ~60-90
+                    // (measured; 120 came back the moment both sides went).
                     try sideDisplays[index].create(
                         width: effective.width, height: effective.height,
-                        hiDPI: false, identity: UInt32(2 + index)
+                        hiDPI: false, refreshRate: Double(frameRate),
+                        identity: UInt32(2 + index)
                     )
                 } catch {
                     Self.appendLog("side screen \(index) unavailable: \(error)")
@@ -716,8 +730,9 @@ final class SpatialController: ObservableObject {
             isRunning = false
             if source == .glassesOnly {
                 // Mirroring stays — it is the desired end state, so there is
-                // no enforcement wait and stop is immediate.
-                displays.restorePanelOnly()
+                // no enforcement wait and stop is immediate. The standalone
+                // experiment re-mirrors first to land in the same state.
+                displays.restorePanelOnly(remirror: standalone120)
                 setStatus("Idle")
             } else {
                 setStatus("Restoring displays…")
@@ -806,7 +821,7 @@ final class SpatialController: ObservableObject {
         isRunning = false
         if source == .glassesOnly {
             // Mirroring is the desired end state here: no fight, no helper.
-            displays.restorePanelOnly()
+            displays.restorePanelOnly(remirror: standalone120)
             return
         }
         do {
@@ -831,7 +846,7 @@ final class SpatialController: ObservableObject {
         teardown()
         restoreBrightness()
         if source == .glassesOnly {
-            displays.restorePanelOnly()
+            displays.restorePanelOnly(remirror: standalone120)
         } else {
             displays.restore()
         }
@@ -1074,16 +1089,21 @@ final class SpatialController: ObservableObject {
             // In glasses-only mode the mirror set is the *desired* state, not
             // a fault — the desk-display checks below don't apply either,
             // because the built-in is just a (dimmed) mirror of the glasses.
-            if source != .glassesOnly, CGDisplayIsInMirrorSet(glassesID) != 0 {
+            let mirrorIsDesired = source == .glassesOnly && !standalone120
+            if !mirrorIsDesired, CGDisplayIsInMirrorSet(glassesID) != 0 {
                 // Try to undo it before treating it as fatal — macOS often
                 // reinstates mirroring transiently while a reconfiguration
                 // settles, and recovering beats tearing the session down.
                 mirrorRecoveryAttempts += 1
                 if mirrorRecoveryAttempts <= 2, displays.reassertUnmirrored() {
-                    // The re-apply also made the glasses the main display,
-                    // which moved the menu bar underneath the overlay. Put
-                    // the layout back too, not just the mirroring.
-                    applyArrangement()
+                    // The re-apply also rearranged the displays and may have
+                    // reverted the desktop mode; put both back.
+                    if source == .glassesOnly {
+                        displays.arrangeStandalone()
+                        displays.reapplyDesktopSize()
+                    } else {
+                        applyArrangement()
+                    }
                     setStatus("macOS re-enabled mirroring; un-mirrored it again.")
                     unhealthyTicks = 0
                     return
@@ -1132,7 +1152,7 @@ final class SpatialController: ObservableObject {
         teardown()
         restoreBrightness()
         if source == .glassesOnly {
-            displays.restorePanelOnly()
+            displays.restorePanelOnly(remirror: standalone120)
         } else {
             displays.restore()
         }

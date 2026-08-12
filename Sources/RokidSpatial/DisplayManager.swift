@@ -210,27 +210,45 @@ final class DisplayManager {
     private(set) var glassesDesktopSize = (width: 1920, height: 1200)
     private(set) var availableDesktopSizes: [(width: Int, height: Int)] = []
 
-    func prepareGlassesOnly(mode: DisplayMode, desktopSize: (width: Int, height: Int)? = nil) throws {
+    func prepareGlassesOnly(mode: DisplayMode, desktopSize: (width: Int, height: Int)? = nil,
+                            mirrored: Bool = true) throws {
         availableDesktopSizes = []
         previousMode = try? RokidDisplay.currentMode()
         try RokidDisplay.setMode(mode)
         Thread.sleep(forTimeInterval: 3.0)
 
-        guard let glassesID = findGlassesDisplay() else {
+        guard var glassesID = findGlassesDisplay() else {
             throw SetupError.glassesNotFound
         }
         glassesDisplayID = glassesID
         deskDisplayID = onlineDisplays().first { CGDisplayIsBuiltin($0) != 0 }
 
-        // macOS usually re-mirrors on its own within a few seconds of the mode
-        // change — its remembered arrangement finally working *for* us. Only
-        // step in if it hasn't.
-        if CGDisplayIsInMirrorSet(glassesID) == 0, let builtin = deskDisplayID {
-            log?("glasses-only: mirroring built-in onto the glasses")
-            try configure { config in
-                CGConfigureDisplayMirrorOfDisplay(config, builtin, glassesID)
+        if mirrored {
+            // macOS usually re-mirrors on its own within a few seconds of the
+            // mode change — its remembered arrangement finally working *for*
+            // us. Only step in if it hasn't.
+            if CGDisplayIsInMirrorSet(glassesID) == 0, let builtin = deskDisplayID {
+                log?("glasses-only: mirroring built-in onto the glasses")
+                try configure { config in
+                    CGConfigureDisplayMirrorOfDisplay(config, builtin, glassesID)
+                }
+                Thread.sleep(forTimeInterval: 1.0)
             }
-            Thread.sleep(forTimeInterval: 1.0)
+        } else {
+            // Standalone experiment: the 60 Hz built-in member of the mirror
+            // set is exactly what macOS "harmonizes" the flip rate down to
+            // (BetterDisplay #121/#4280 confirm mirroring caps at 60). Run
+            // the glasses as their own display; the built-in stays a dark,
+            // separate desktop parked below. This re-opens the re-mirror war
+            // the mirror-embrace ended — the enforcement machinery from the
+            // extended modes stands guard again (here and in the watchdog).
+            log?("glasses-only: standalone (no mirror) — 120 Hz experiment")
+            enforceUnmirrored(timeout: 15, quiet: 4)
+            // Un-mirroring re-enumerates; stale IDs make everything below
+            // silently no-op.
+            glassesID = findGlassesDisplay() ?? glassesID
+            glassesDisplayID = glassesID
+            deskDisplayID = onlineDisplays().first { CGDisplayIsBuiltin($0) != 0 }
         }
 
         // Learn what the panel actually offers, then optionally run the
@@ -257,6 +275,25 @@ final class DisplayManager {
         if let current = CGDisplayCopyDisplayMode(glassesID) {
             glassesDesktopSize = (current.width, current.height)
         }
+
+        if !mirrored { arrangeStandalone() }
+    }
+
+    /// Standalone layout: glasses at the origin (main — menu bar and new
+    /// windows land where the eye is), built-in parked directly below so the
+    /// pointer rarely wanders onto the dark panel. Re-run whenever macOS
+    /// re-applies its remembered arrangement.
+    func arrangeStandalone() {
+        guard let glassesID = glassesDisplayID, let deskID = deskDisplayID,
+              deskID != glassesID else { return }
+        let height = Int32(CGDisplayPixelsHigh(glassesID))
+        try? configure { config in
+            var err = CGConfigureDisplayOrigin(config, glassesID, 0, 0)
+            guard err == .success else { return err }
+            err = CGConfigureDisplayOrigin(config, deskID, 0, height)
+            return err
+        }
+        Thread.sleep(forTimeInterval: 0.5)
     }
 
     /// macOS re-applies its remembered display mode during later
@@ -326,7 +363,20 @@ final class DisplayManager {
     /// as macOS likes it. With no overlay and no second desktop there is
     /// nothing left that can trap the user, so there is nothing to enforce
     /// and no helper process to spawn.
-    func restorePanelOnly() {
+    /// `remirror` is for the standalone experiment: put the built-in back
+    /// into the glasses' mirror set first, so stopping lands in the same
+    /// trap-free state as the mirrored flavour (no second desktop to lose
+    /// windows on).
+    func restorePanelOnly(remirror: Bool = false) {
+        if remirror, let glassesID = glassesDisplayID,
+           CGDisplayIsInMirrorSet(glassesID) == 0,
+           let builtin = deskDisplayID, builtin != glassesID {
+            log?("restore(panel-only): re-mirroring the built-in onto the glasses")
+            try? configure { config in
+                CGConfigureDisplayMirrorOfDisplay(config, builtin, glassesID)
+            }
+            Thread.sleep(forTimeInterval: 1.0)
+        }
         log?("restore(panel-only): setting panel to 2D, leaving mirroring alone")
         try? RokidDisplay.setMode(.sameOnBoth)
     }

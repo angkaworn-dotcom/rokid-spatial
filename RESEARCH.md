@@ -97,3 +97,24 @@ the ghosting. 60 Hz runs 1:1 with 0 slow frames. If 120 Hz flips are ever
 worth chasing again: try a Mac reboot / glasses re-plug first to see if the
 window-server state clears, and check whether the golden window correlates
 with *nothing else on the desktop having ever animated* since session start.
+
+### Update, same day: real 120 Hz recovered — standalone + matched-rate sides
+
+The 60 Hz stick was two separate drags, isolated live:
+
+1. **The mirror set.** macOS harmonizes a mirror set's flip rate down to
+   its 60 Hz member (BetterDisplay #121/#4280 document this; the half-hour
+   of 120-while-mirrored earlier rode on direct-scanout luck that never
+   returned). Fix: `standalone120` — glasses-only without the mirror,
+   glasses main at the origin, built-in parked below, dark. The re-mirror
+   war machinery (enforceUnmirrored + watchdog re-assert) guards it.
+2. **60 Hz virtual side displays.** Even unmirrored, the two side screens
+   dragged flips to a fluctuating 60–92. They were created at
+   CGVirtualDisplay's default 60 Hz; creating them at the panel's rate
+   (120) fixed it — all three screens now pace at ~118–120.
+
+Measured end state: standalone + L+R sides at 120 Hz → 118–120 fps avg,
+0–16 slow per 10 s. Mirrored mode remains the default (trap-free); the
+experiment toggle is "No mirror (120 Hz experiment)" in More.
+Untested interaction: scaled desktop sizes (e.g. 1344×840) under
+standalone — the compositor scaling may or may not drag the rate again.
