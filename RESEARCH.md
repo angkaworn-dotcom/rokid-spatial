@@ -64,3 +64,36 @@ Worth a look if very wide/large virtual screens ever feel edge-distorted.
   50 Hz) — the SDK blob is x86-64 Linux only, and our local filter reads raw
   sensors at 440 Hz anyway. Documented in PROTOCOL.md.
 - Breezy's smooth-follow — ours is already equivalent (deadzone + settle).
+
+## Faint grey double lines during head movement (2026-08-12)
+
+Symptom: very faint grey lines that appear on any head movement, all modes.
+Root cause, **confirmed by eye**: frame-duplication ghosting. The window
+server had stopped flipping the glasses display at 120 Hz and settled at
+the mirror set's 60 Hz member rate — `sample` showed the render thread 73%
+blocked in `nextDrawable` — so every rendered frame was scanned out twice,
+and pursuit eye motion splits high-contrast edges into a faint double image.
+At 60 Hz (panel mode 0, render and refresh 1:1) the lines vanish entirely.
+
+What did NOT fix the 60 Hz stick (all tested live):
+
+- **RGSS anti-moiré resample** (Ben Golus's 4-tap rotated grid; also what
+  godot-xr-tools #459 recommends): shipped as a toggle, correct fix for
+  resampling moiré, but this artifact wasn't moiré — lines persisted.
+- **Scanout kick** (re-ordering the overlay window when fps sits below 100
+  for 10 s): fires, never recovers the flip rate.
+- **Native desktop size** (1920×1200 instead of scaled 1344×840): no change.
+- **Disabling both side screens**: no change.
+- Pausing the 60 fps video, closing/restarting the app, Stop/Start: no
+  change. The stick survives everything short of (untested) a reboot or
+  glasses re-plug.
+
+Timeline note: 120 Hz flips (120 fps, 0 slow) worked for half an hour
+(03:38–04:16), then degraded and never returned. Trigger unknown.
+
+Resolution: the user chose 60 Hz as the daily driver — most content is
+60 fps anyway, and with flips stuck at 60 the 120 Hz mode buys nothing but
+the ghosting. 60 Hz runs 1:1 with 0 slow frames. If 120 Hz flips are ever
+worth chasing again: try a Mac reboot / glasses re-plug first to see if the
+window-server state clears, and check whether the golden window correlates
+with *nothing else on the desktop having ever animated* since session start.
