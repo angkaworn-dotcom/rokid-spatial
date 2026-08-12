@@ -347,6 +347,16 @@ final class SpatialController: ObservableObject {
     /// variants, 120 for mode 3.
     private var frameRate: Int { source == .glassesOnly ? sbsMode.frameRate : 60 }
 
+    /// Capture rates adapt to Low Power Mode. On a downclocked machine the
+    /// window server cannot both produce capture frames at full rate and
+    /// flip the glasses at the panel rate — and it is the flips that read
+    /// as stutter. Halving our capture demand is the one lever the app
+    /// owns: content updates drop to 30 (visible only on video), while
+    /// rendering — head tracking, the floating screen — keeps the full
+    /// panel rate.
+    private var captureRate: Int { lowPowerMode ? min(30, frameRate) : frameRate }
+    private var sideCaptureRate: Int { lowPowerMode ? 15 : 30 }
+
     // MARK: Persistence
 
     /// Settings survive relaunches. Until they did, every launch silently
@@ -423,9 +433,48 @@ final class SpatialController: ObservableObject {
             object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
+                guard let self else { return }
                 let active = ProcessInfo.processInfo.isLowPowerModeEnabled
-                self?.lowPowerMode = active
-                Self.appendLog("power: Low Power Mode \(active ? "ON — expect ~half frame rate" : "off")")
+                guard self.lowPowerMode != active else { return }
+                self.lowPowerMode = active
+                Self.appendLog("power: Low Power Mode \(active ? "ON — reducing capture to protect render pacing" : "off — restoring full capture rate")")
+                self.adaptCaptureToPowerState()
+            }
+        }
+    }
+
+    /// Re-open the capture streams at the power-state-appropriate rates.
+    /// Runs when Low Power Mode flips mid-session (plugging or unplugging
+    /// the charger), so the session never needs a restart over it.
+    private func adaptCaptureToPowerState() {
+        guard isRunning else { return }
+        let captureID: CGDirectDisplayID?
+        switch source {
+        case .mirror: captureID = displays.deskDisplayID
+        case .virtualDesktop: captureID = virtualDisplay.displayID
+        case .glassesOnly:
+            captureID = stereoActive ? virtualDisplay.displayID
+                                     : displays.glassesDisplayID
+        }
+        guard let captureID else { return }
+        Task {
+            await capture.stop()
+            try? await capture.start(
+                displayID: captureID,
+                frameRate: captureRate,
+                excludingWindowNumber: source == .glassesOnly ? window?.windowNumber : nil,
+                showsCursor: source != .glassesOnly
+            )
+            frameClock.mark()
+            if source == .glassesOnly {
+                for index in sideScreens.indices {
+                    guard let sideID = sideDisplays[index].displayID else { continue }
+                    let sideCapture = sideCaptures[index]
+                    await sideCapture.stop()
+                    try? await sideCapture.start(displayID: sideID,
+                                                 frameRate: sideCaptureRate,
+                                                 showsCursor: false)
+                }
             }
         }
     }
@@ -672,7 +721,7 @@ final class SpatialController: ObservableObject {
             do {
                 try await capture.start(
                     displayID: captureID,
-                    frameRate: frameRate,
+                    frameRate: captureRate,
                     excludingWindowNumber: source == .glassesOnly ? window?.windowNumber : nil,
                     // In glasses-only mode the renderer draws its own cursor;
                     // SCK's would be a duplicate whenever the system cursor
@@ -807,7 +856,8 @@ final class SpatialController: ObservableObject {
                     // Mostly-static content; half rate is plenty and keeps
                     // the window server's capture work away from the main
                     // screen's 60 fps floor.
-                    try await sideCapture.start(displayID: sideID, frameRate: 30,
+                    try await sideCapture.start(displayID: sideID,
+                                                frameRate: sideCaptureRate,
                                                 showsCursor: false)
                     renderer.sideActive[index] = true
                 } catch {
@@ -1008,7 +1058,7 @@ final class SpatialController: ObservableObject {
             do {
                 try await self.capture.start(
                     displayID: captureID,
-                    frameRate: self.frameRate,
+                    frameRate: self.captureRate,
                     excludingWindowNumber: self.source == .glassesOnly
                         ? self.window?.windowNumber : nil,
                     showsCursor: self.source != .glassesOnly

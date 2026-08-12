@@ -50,7 +50,7 @@ struct SettingsView: View {
             }
 
             if controller.lowPowerMode {
-                Text("Low Power Mode is limiting the frame rate (~30 fps). Plug in, or set System Settings → Battery → Low Power Mode to Never.")
+                Text("Low Power Mode: content updates reduced to 30 fps to keep head-tracking smooth. For full quality, plug in or set System Settings → Battery → Low Power Mode to Never.")
                     .font(.caption2)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
