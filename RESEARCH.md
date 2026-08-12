@@ -165,6 +165,22 @@ frame duplication; the timing artifact simply scales with refresh rate
 ("มิติภาพดีกว่า"), sharpness good, motion smooth at 1:1. Daily-driver
 choice (clean 60 vs deep-but-faintly-lined 90) stays with the user.
 
+**Case closed on the faint lines (same day, later):** the sensitive test
+is a white window with text, scrolled, watched through the glasses. With
+it, the faint lines appear in *every* condition: SBS-90, SBS-60, plain
+2D 60 in-session — and, decisively, **with the app closed entirely**
+(raw mirrored desktop, direct scanout, no capture chain). Eliminated one
+by one, live: stereo disparity (IPD 0 — no change), renderer moiré
+(RGSS toggle — no change), frame duplication (measured 90/0 1:1 — still
+there), the capture chain (app closed — still there). The faint
+scroll-ghost is **inherent to the panel/optics** (sample-and-hold
+pursuit ghosting on high-contrast scrolling content) and has been there
+since day one; nobody had looked the sensitive way before. It is not
+fixable host-side on any OS. The *obvious* 120 Hz lines remain a real,
+separate artifact (frame duplication, proven earlier). Consequence: the
+mode choice is purely depth (SBS) vs simplicity and 60 vs 90 smoothness
+— the faint lines are a constant everywhere.
+
 Traps found live during the build, all now defended:
 
 1. **The re-applied mirror is not always onto the glasses.** Creating
