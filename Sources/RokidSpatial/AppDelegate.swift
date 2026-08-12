@@ -36,10 +36,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                rawValue: String(flag.dropFirst("--source=".count))) {
             controller.source = source
         }
-        // `--sbs` opts the session into SBS-90, so a rebuild can be launched
-        // straight into the mode under test: `--source=glassesOnly --sbs --autostart`.
+        // `--sbs` (90 Hz) or `--sbs=60` opts the session into SBS, so a
+        // rebuild can be launched straight into the mode under test:
+        // `--source=glassesOnly --sbs=60 --autostart`.
         if CommandLine.arguments.contains("--sbs") {
-            controller.sbs90 = true
+            controller.sbsMode = .sbs90
+        } else if CommandLine.arguments.contains("--sbs=60") {
+            controller.sbsMode = .sbs60
         }
         if CommandLine.arguments.contains("--autostart") {
             controller.start()

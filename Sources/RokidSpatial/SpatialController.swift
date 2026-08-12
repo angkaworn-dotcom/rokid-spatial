@@ -93,15 +93,41 @@ final class SpatialController: ObservableObject {
     /// whenever the head moves and the desktop's pixel rows beat against the
     /// panel raster. Live-switchable so the difference can be judged by eye.
     @Published var antiMoire = false { didSet { renderer?.antiMoire = antiMoire; persist(antiMoire, "antiMoire") } }
-    /// Station-2-style SBS: panel mode 4 (3840×1200 @ 90 Hz), stereo per-eye
-    /// rendering with the IPD offset, and a 1920×1200 @ 90 Hz virtual display
-    /// as the working desktop. Opt-in, and only meaningful with `.glassesOnly`.
-    /// Eye-tested 2026-08-12: the 90 Hz mode is free of the 120 Hz mode's
-    /// grey-line artifact.
-    @Published var sbs90 = false { didSet { persist(sbs90, "sbs90") } }
+    /// Stereo SBS: per-eye rendering with the IPD offset onto a separate
+    /// working virtual display, run standalone. Two panel modes carry it —
+    /// mode 1 (3840×1080 @ 60 Hz) and mode 4 (3840×1200 @ 90 Hz, what Rokid
+    /// ships with Station 2). The grey-line timing artifact scales with the
+    /// rate (60 clean → 90 faint → 120 obvious, all eye-tested 2026-08-12),
+    /// so 60 trades a little smoothness and 120 rows for a cleaner image.
+    /// Opt-in, and only meaningful with `.glassesOnly`.
+    enum SBSMode: String, CaseIterable, Identifiable {
+        case off
+        case sbs60
+        case sbs90
 
-    /// True when the session runs (or would run) the SBS-90 pipeline.
-    var sbsActive: Bool { source == .glassesOnly && sbs90 }
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .off: return "Off"
+            case .sbs60: return "60 Hz"
+            case .sbs90: return "90 Hz"
+            }
+        }
+
+        /// The panel mode carrying this variant (meaningless for `.off`).
+        var panelMode: DisplayMode { self == .sbs90 ? .highRefreshRateSBS : .stereo }
+
+        /// Working-desktop (and side-screen) size: matches the per-eye raster.
+        var desktopSize: (width: Int, height: Int) {
+            self == .sbs90 ? (1920, 1200) : (1920, 1080)
+        }
+    }
+
+    @Published var sbsMode: SBSMode = .off { didSet { persist(sbsMode.rawValue, "sbsMode") } }
+
+    /// True when the session runs (or would run) the SBS pipeline.
+    var sbsActive: Bool { source == .glassesOnly && sbsMode != .off }
     @Published var motionLock: Float = 0 { didSet { screen.motionLock = motionLock; persist(motionLock, "motionLock") } }
     /// Angular gap between neighbouring screens, degrees. Zero makes the
     /// three screens one continuous wall.
@@ -267,9 +293,9 @@ final class SpatialController: ObservableObject {
 
     /// 60 Hz mode-0 is the daily driver: clean image, 1:1 pacing (the 120 Hz
     /// mode shows faint grey lines on motion — a timing-negotiation problem
-    /// per RESEARCH.md — and is parked for the Windows port). SBS-90 opt-in
-    /// runs panel mode 4 at 90 Hz, which the same eye test cleared.
-    private var frameRate: Int { sbsActive ? 90 : 60 }
+    /// per RESEARCH.md — and is parked for the Windows port). SBS opt-ins run
+    /// panel mode 1 at 60 or mode 4 at 90 (faint lines, user-tolerable).
+    private var frameRate: Int { sbsActive && sbsMode == .sbs90 ? 90 : 60 }
 
     // MARK: Persistence
 
@@ -291,7 +317,12 @@ final class SpatialController: ObservableObject {
         if d.object(forKey: "doubleTapRecenter") != nil { doubleTapRecenter = d.bool(forKey: "doubleTapRecenter") }
         if d.object(forKey: "curved") != nil { curved = d.bool(forKey: "curved") }
         if d.object(forKey: "antiMoire") != nil { antiMoire = d.bool(forKey: "antiMoire") }
-        if d.object(forKey: "sbs90") != nil { sbs90 = d.bool(forKey: "sbs90") }
+        if let v = SBSMode(rawValue: d.string(forKey: "sbsMode") ?? "") {
+            sbsMode = v
+        } else if d.bool(forKey: "sbs90") {
+            // The short-lived Bool this picker replaced, same day.
+            sbsMode = .sbs90
+        }
         if let v = SideScreens(rawValue: d.string(forKey: "sideScreens") ?? "") {
             sideScreens = v
         }
@@ -409,15 +440,18 @@ final class SpatialController: ObservableObject {
         // Creating it after un-mirroring simply undoes the un-mirroring.
         // SBS-90's working desktop obeys the same rule: create first, fight once.
         if source == .virtualDesktop || sbsActive {
-            setStatus(sbsActive ? "Creating the 90 Hz working desktop…"
+            setStatus(sbsActive ? "Creating the \(frameRate) Hz working desktop…"
                                 : "Creating the virtual desktop…")
             do {
                 if sbsActive {
-                    // 1920×1200 matches the per-eye panel raster exactly, and
-                    // 90 Hz matches the panel: a 60 Hz virtual display in the
-                    // set drags the whole composition down (measured 2026-08-12).
-                    try virtualDisplay.create(width: 1920, height: 1200,
-                                              hiDPI: false, refreshRate: 90)
+                    // The size matches the per-eye panel raster exactly, and
+                    // the rate matches the panel: a slower virtual display in
+                    // the set drags the whole composition down (measured
+                    // 2026-08-12).
+                    let size = sbsMode.desktopSize
+                    try virtualDisplay.create(width: size.width, height: size.height,
+                                              hiDPI: false,
+                                              refreshRate: Double(frameRate))
                 } else {
                     try virtualDisplay.create(
                         width: virtualResolution.width,
@@ -432,8 +466,8 @@ final class SpatialController: ObservableObject {
             }
         }
 
-        let displayMode: DisplayMode = sbsActive ? .highRefreshRateSBS : .sameOnBoth
-        setStatus(sbsActive ? "Switching the glasses to 90 Hz SBS…"
+        let displayMode: DisplayMode = sbsActive ? sbsMode.panelMode : .sameOnBoth
+        setStatus(sbsActive ? "Switching the glasses to \(frameRate) Hz SBS…"
                             : "Switching the glasses to 60 Hz…")
 
         // Display reconfiguration blocks for a few seconds while the panel
@@ -443,7 +477,7 @@ final class SpatialController: ObservableObject {
         Task.detached(priority: .userInitiated) { [displays, source, sbsActive] in
             do {
                 if sbsActive {
-                    try displays.prepareSBS()
+                    try displays.prepareSBS(mode: displayMode)
                 } else if source == .glassesOnly {
                     try displays.prepareGlassesOnly(mode: displayMode)
                 } else {
@@ -507,10 +541,10 @@ final class SpatialController: ObservableObject {
             // Side displays are created at exactly the main desktop's
             // effective size, so all screens match and windows keep their
             // size when dragged across. Failure never ends the session.
-            // SBS: sides match the working desktop, not the glasses' 16:5
-            // sliver. All virtual displays run at the panel's rate — a 60 Hz
+            // SBS: sides match the working desktop, not the glasses' wide
+            // sliver. All virtual displays run at the panel's rate — a slower
             // member drags composition down even unmirrored.
-            let effective = sbsActive ? (width: 1920, height: 1200)
+            let effective = sbsActive ? sbsMode.desktopSize
                                       : displays.glassesDesktopSize
             for index in sideScreens.indices {
                 do {

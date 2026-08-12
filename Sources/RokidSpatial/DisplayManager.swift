@@ -291,18 +291,19 @@ final class DisplayManager {
         if !mirrored { arrangeStandalone() }
     }
 
-    /// SBS-90 (Station-2-style): panel mode 4 — 3840×1200 @ 90 Hz, stereo —
-    /// run *standalone*. No mirror set anywhere: macOS harmonizes a mirror
-    /// set's flip rate down to its 60 Hz built-in member, which would waste
-    /// the whole mode. The working desktop is a separate 90 Hz virtual
-    /// display the controller creates *before* calling this — creating a
-    /// display is itself a reconfiguration, and doing it afterwards would
-    /// invite macOS to re-apply the remembered (mirrored) arrangement this
-    /// just fought off.
-    func prepareSBS() throws {
+    /// SBS: panel mode 4 (3840×1200 @ 90 Hz, what Station 2 runs) or mode 1
+    /// (3840×1080 @ 60 Hz) — stereo, run *standalone*. No mirror set
+    /// anywhere: macOS harmonizes a mirror set's flip rate down to its 60 Hz
+    /// built-in member, which would waste the 90 Hz mode (and even at 60 a
+    /// mirrored member cannot be repositioned out of the wall). The working
+    /// desktop is a separate matching-rate virtual display the controller
+    /// creates *before* calling this — creating a display is itself a
+    /// reconfiguration, and doing it afterwards would invite macOS to
+    /// re-apply the remembered (mirrored) arrangement this just fought off.
+    func prepareSBS(mode: DisplayMode = .highRefreshRateSBS) throws {
         availableDesktopSizes = []
         previousMode = try? RokidDisplay.currentMode()
-        try RokidDisplay.setMode(.highRefreshRateSBS)
+        try RokidDisplay.setMode(mode)
         Thread.sleep(forTimeInterval: 3.0)
 
         // The re-mirror war again. Short quiet window: the session watchdog
@@ -317,10 +318,12 @@ final class DisplayManager {
         deskDisplayID = onlineDisplays().first { CGDisplayIsBuiltin($0) != 0 }
 
         // Assert the panel-native raster — the mode macOS remembers for this
-        // display can be anything a past tangle left behind. Every mode-4
-        // desktop mode is 90 Hz (measured), so only the size needs picking:
-        // 1920×600 points at 2.0 backing = the full 3840×1200 px raster.
-        setDesktopResolution(glassesID, width: 1920, height: 600)
+        // display can be anything a past tangle left behind. Every desktop
+        // mode a SBS panel mode offers runs at that mode's one rate
+        // (measured), so only the size needs picking: full-width points at
+        // 2.0 backing = the full px raster (3840×1200 or 3840×1080).
+        setDesktopResolution(glassesID, width: 1920,
+                             height: mode == .highRefreshRateSBS ? 600 : 540)
         if let current = CGDisplayCopyDisplayMode(glassesID) {
             glassesDesktopSize = (current.width, current.height)
         }
