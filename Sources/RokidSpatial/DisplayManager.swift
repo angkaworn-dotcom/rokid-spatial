@@ -629,8 +629,13 @@ final class DisplayManager {
     func reassertGlassesOnlyMirror() -> Bool {
         guard let glassesID = glassesDisplayID,
               let builtin = deskDisplayID, builtin != glassesID,
-              CGDisplayIsInMirrorSet(builtin) == 0 else { return false }
-        log?("glasses-only: built-in fell out of the mirror set — re-mirroring")
+              // Membership alone is not enough: after the SBS sessions macOS
+              // remembers built-in↔side-display pairs and re-applies them,
+              // and a built-in mirroring the *left side* passed the old
+              // membership check while the laptop showed the wrong screen
+              // (seen live). The master must be the glasses, specifically.
+              CGDisplayMirrorsDisplay(builtin) != glassesID else { return false }
+        log?("glasses-only: built-in is not mirroring the glasses — re-mirroring")
         try? configure { config in
             CGConfigureDisplayMirrorOfDisplay(config, builtin, glassesID)
         }
