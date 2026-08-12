@@ -1135,12 +1135,12 @@ final class SpatialController: ObservableObject {
                     guard let id = sideDisplays[index].displayID else { return nil }
                     return (id, index == 0)
                 }
-                if displays.wallLayoutIsBroken(sides: sides) {
+                if displays.wallLayoutIsBroken(main: glassesID, sides: sides) {
                     layoutFixInFlight = true
                     Self.appendLog("layout: the wall drifted — recentring the main screen")
                     Task {
                         await Task.detached { [displays] in
-                            displays.fixWallLayout(sides: sides)
+                            displays.fixWallLayout(main: glassesID, sides: sides)
                         }.value
                         if let renderer = self.renderer {
                             self.attachRenderedCursor(to: renderer, displayID: glassesID)

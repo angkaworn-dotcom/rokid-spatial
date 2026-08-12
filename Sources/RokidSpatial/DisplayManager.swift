@@ -291,6 +291,41 @@ final class DisplayManager {
         if !mirrored { arrangeStandalone() }
     }
 
+    /// SBS-90 (Station-2-style): panel mode 4 — 3840×1200 @ 90 Hz, stereo —
+    /// run *standalone*. No mirror set anywhere: macOS harmonizes a mirror
+    /// set's flip rate down to its 60 Hz built-in member, which would waste
+    /// the whole mode. The working desktop is a separate 90 Hz virtual
+    /// display the controller creates *before* calling this — creating a
+    /// display is itself a reconfiguration, and doing it afterwards would
+    /// invite macOS to re-apply the remembered (mirrored) arrangement this
+    /// just fought off.
+    func prepareSBS() throws {
+        availableDesktopSizes = []
+        previousMode = try? RokidDisplay.currentMode()
+        try RokidDisplay.setMode(.highRefreshRateSBS)
+        Thread.sleep(forTimeInterval: 3.0)
+
+        // The re-mirror war again. Short quiet window: the session watchdog
+        // stands guard once a second from here on.
+        enforceUnmirrored(timeout: 15, quiet: 4)
+
+        // Un-mirroring re-enumerates; resolve IDs only after it.
+        guard let glassesID = findGlassesDisplay() else {
+            throw SetupError.glassesNotFound
+        }
+        glassesDisplayID = glassesID
+        deskDisplayID = onlineDisplays().first { CGDisplayIsBuiltin($0) != 0 }
+
+        // Assert the panel-native raster — the mode macOS remembers for this
+        // display can be anything a past tangle left behind. Every mode-4
+        // desktop mode is 90 Hz (measured), so only the size needs picking:
+        // 1920×600 points at 2.0 backing = the full 3840×1200 px raster.
+        setDesktopResolution(glassesID, width: 1920, height: 600)
+        if let current = CGDisplayCopyDisplayMode(glassesID) {
+            glassesDesktopSize = (current.width, current.height)
+        }
+    }
+
     /// Standalone layout: glasses at the origin (main — menu bar and new
     /// windows land where the eye is), built-in parked directly below so the
     /// pointer rarely wanders onto the dark panel. Re-run whenever macOS
@@ -516,13 +551,18 @@ final class DisplayManager {
     /// Push it back once before giving up — often it is a transient settling
     /// step rather than a permanent decision.
     @discardableResult
-    /// The wall layout: main display at the origin (menu bar and centre of
-    /// the wall), right side flush against its right edge, left side flush
-    /// against its left. macOS's remembered arrangements scatter these on
-    /// re-apply; the watchdog checks cheaply every second and fixes in one
-    /// batched reconfiguration.
-    func wallLayoutIsBroken(sides: [(id: CGDirectDisplayID, isRight: Bool)]) -> Bool {
-        guard let mainID = glassesDisplayID else { return false }
+    /// The wall layout: `mainID` at the origin (menu bar and centre of the
+    /// wall), right side flush against its right edge, left side flush
+    /// against its left, and any `parked` displays stacked directly below —
+    /// reachable, but the pointer has to be pushed there deliberately.
+    /// macOS's remembered arrangements scatter these on re-apply; the
+    /// watchdog checks cheaply every second and fixes in one batched
+    /// reconfiguration. Glasses-only passes the glasses as main; SBS-90
+    /// passes the working virtual desktop as main and parks the glasses
+    /// and the built-in below it.
+    func wallLayoutIsBroken(main mainID: CGDirectDisplayID,
+                            sides: [(id: CGDirectDisplayID, isRight: Bool)],
+                            parked: [CGDirectDisplayID] = []) -> Bool {
         let main = CGDisplayBounds(mainID)
         if main.origin != .zero { return true }
         for side in sides {
@@ -530,11 +570,18 @@ final class DisplayManager {
             let expectedX = side.isRight ? main.maxX : main.minX - bounds.width
             if bounds.origin.x != expectedX || bounds.origin.y != main.minY { return true }
         }
+        var y = main.maxY
+        for id in parked {
+            let bounds = CGDisplayBounds(id)
+            if bounds.origin.x != 0 || bounds.origin.y != y { return true }
+            y += bounds.height
+        }
         return false
     }
 
-    func fixWallLayout(sides: [(id: CGDirectDisplayID, isRight: Bool)]) {
-        guard let mainID = glassesDisplayID else { return }
+    func fixWallLayout(main mainID: CGDirectDisplayID,
+                       sides: [(id: CGDirectDisplayID, isRight: Bool)],
+                       parked: [CGDirectDisplayID] = []) {
         let mainWidth = Int32(CGDisplayPixelsWide(mainID))
         try? configure { config in
             var err = CGConfigureDisplayOrigin(config, mainID, 0, 0)
@@ -544,6 +591,12 @@ final class DisplayManager {
                 err = CGConfigureDisplayOrigin(config, side.id,
                                                side.isRight ? mainWidth : -width, 0)
                 guard err == .success else { return err }
+            }
+            var y = Int32(CGDisplayPixelsHigh(mainID))
+            for id in parked {
+                err = CGConfigureDisplayOrigin(config, id, 0, y)
+                guard err == .success else { return err }
+                y += Int32(CGDisplayPixelsHigh(id))
             }
             return .success
         }
