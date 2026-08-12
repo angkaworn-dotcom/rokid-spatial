@@ -622,6 +622,16 @@ final class DisplayManager {
         return true
     }
 
+    /// True if any online display sits in a mirror set — SBS-90's watchdog
+    /// fault condition. The mirror macOS re-applies is not always onto the
+    /// glasses: seen live 2026-08-12, creating the side displays brought the
+    /// built-in back mirrored onto the *left side* virtual display, which a
+    /// glasses-focused check missed entirely (and the layout fix then looped
+    /// forever trying to move a display that mirroring had pinned).
+    var anyDisplayMirrored: Bool {
+        onlineDisplays().contains { CGDisplayIsInMirrorSet($0) != 0 }
+    }
+
     func reassertUnmirrored() -> Bool {
         let all = onlineDisplays()
         guard all.contains(where: { CGDisplayIsInMirrorSet($0) != 0 }) else { return true }

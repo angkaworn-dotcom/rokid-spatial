@@ -620,6 +620,13 @@ final class SpatialController: ObservableObject {
                 let parked = [displays.glassesDisplayID, displays.deskDisplayID]
                     .compactMap { $0 }.filter { $0 != captureID }
                 await Task.detached { [displays] in
+                    // Creating the sides invites a remembered-arrangement
+                    // re-apply, and the mirror it brings back is not
+                    // necessarily onto the glasses (seen live: built-in
+                    // mirrored onto the left side). Clear every mirror
+                    // first — a mirrored display cannot be repositioned,
+                    // so the layout fix would loop forever against it.
+                    _ = displays.reassertUnmirrored()
                     displays.fixWallLayout(main: captureID, sides: sides, parked: parked)
                 }.value
             } else {
@@ -1148,7 +1155,8 @@ final class SpatialController: ObservableObject {
             // re-mirror: a mirror set harmonizes its flip rate down to the
             // 60 Hz built-in member and the 90 Hz mode is wasted.
             if source != .glassesOnly || sbsActive,
-               CGDisplayIsInMirrorSet(glassesID) != 0 {
+               sbsActive ? displays.anyDisplayMirrored
+                         : CGDisplayIsInMirrorSet(glassesID) != 0 {
                 // Try to undo it before treating it as fatal — macOS often
                 // reinstates mirroring transiently while a reconfiguration
                 // settles, and recovering beats tearing the session down.
