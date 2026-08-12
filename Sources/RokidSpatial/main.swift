@@ -62,6 +62,18 @@ if let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--panel-mode=") 
     exit(0)
 }
 
+// The Metal Performance HUD. The sanctioned per-layer API
+// (developerHUDProperties) produced no HUD on this machine no matter when it
+// was applied (verified live, three sessions); the loader-level environment
+// switch is what actually works — but it is read when Metal initialises, so
+// it must be set here, before AppKit pulls Metal in, mirroring the persisted
+// settings toggle. Consequence: turning the toggle ON takes effect from the
+// next session start; OFF hides it live via the layer property.
+if UserDefaults.standard.bool(forKey: "metalHUD")
+    || CommandLine.arguments.contains("--hud") {
+    setenv("MTL_HUD_ENABLED", "1", 1)
+}
+
 let application = NSApplication.shared
 // Top-level code is not main-actor isolated here, but it does run on the main
 // thread, which is what AppDelegate's isolation actually requires.
