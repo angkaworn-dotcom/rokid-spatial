@@ -1,7 +1,9 @@
 # Rokid Max — USB protocol notes
 
 Reverse-engineered on macOS 26.6 (Apple M1) against a real Rokid Max,
-serial redacted, firmware/version number `512` (0x200).
+serial redacted, **firmware version `0.40`** (see the query-selector table —
+`bcdDevice` reads 0x0200 but that is the USB device release number, set once
+per model; it is NOT the firmware version and does not move with updates).
 
 ## Device identity
 
@@ -99,9 +101,21 @@ transfer**, not a HID report:
 There is a matching **read** request, `bRequest = 0x81`, which is the safest
 way to test the channel since it changes nothing:
 
+All responses are 64 bytes. With `wIndex 0` the *high byte* of `wValue`
+selects what to read (low byte ignored — 0x0000-0x0003 all answer the same);
+`wIndex 1` carries the mode query. Mapped by sweeping every selector and
+dumping raw (`RokidSpatial --query-sweep`):
+
 | bRequest | wValue | wIndex | returns |
 |---:|---:|---:|---|
-| `0x81` | `0x100` | 0 | serial number string, 64 bytes |
+| `0x81` | `0x00xx` | 0 | **firmware version, ASCII string** (this unit: `0.40`) |
+| `0x81` | `0x01xx` | 0 | serial number string (matches iSerialNumber) |
+| `0x81` | `0x0200` | 0 | a second serial number (other board/component) |
+| `0x81` | `0x0300` | 0 | 32-hex-digit unique ID |
+| `0x81` | `0x0400` | 0 | six little-endian f32s (calibration constants?) |
+| `0x81` | `0x0500` | 0 | ASCII `42` |
+| `0x81` | `0x0800` | 0 | ASCII `6.0.4` — another component's version |
+| `0x81` | `0x0600`, `0x0700`, `0x1000` | 0 | all zeros |
 | `0x81` | `0x0` | `0x1` | current mode in byte 1 |
 
 **Confirmed working on macOS.** Two details matter and both fail as a

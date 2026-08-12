@@ -74,6 +74,34 @@ if UserDefaults.standard.bool(forKey: "metalHUD")
     setenv("MTL_HUD_ENABLED", "1", 1)
 }
 
+// Debug probe: sweep the read-only vendor query channel and dump every
+// response raw (hex + ASCII), hunting for a firmware-version string. The
+// serial (0x100) proves the channel; bcdDevice is NOT a firmware version
+// (device release number, set once per model), so if a real version exists
+// it should be behind one of this request's other selectors.
+if CommandLine.arguments.contains("--query-sweep") {
+    for wIndex: UInt16 in [0, 1] {
+        for wValue: UInt16 in [0x0000, 0x0001, 0x0002, 0x0003,
+                               0x0100, 0x0101, 0x0102,
+                               0x0200, 0x0300, 0x0400, 0x0500,
+                               0x0600, 0x0700, 0x0800, 0x1000] {
+            do {
+                let bytes = try RokidDisplay.query(wValue: wValue, wIndex: wIndex)
+                let hex = bytes.map { String(format: "%02x", $0) }.joined(separator: " ")
+                let ascii = String(bytes: bytes.map {
+                    (32...126).contains($0) ? $0 : UInt8(ascii: ".")
+                }, encoding: .ascii) ?? ""
+                print(String(format: "wValue 0x%04x wIndex %d  len %d", wValue, wIndex, bytes.count))
+                print("  hex:   \(hex)")
+                print("  ascii: \(ascii)")
+            } catch {
+                print(String(format: "wValue 0x%04x wIndex %d  -> \(error)", wValue, wIndex))
+            }
+        }
+    }
+    exit(0)
+}
+
 let application = NSApplication.shared
 // Top-level code is not main-actor isolated here, but it does run on the main
 // thread, which is what AppDelegate's isolation actually requires.

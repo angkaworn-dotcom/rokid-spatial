@@ -103,6 +103,25 @@ public enum RokidDisplay {
         }
     }
 
+    /// Raw read on the vendor query channel (`bRequest 0x81`) — a
+    /// reverse-engineering aid. Reads change nothing on the device; an
+    /// unsupported selector fails as a timeout. Returns the bytes actually
+    /// transferred.
+    public static func query(wValue: UInt16, wIndex: UInt16) throws -> [UInt8] {
+        try withDevice { handle in
+            var buffer = [UInt8](repeating: 0, count: 0x40)
+            let rc = libusb_control_transfer(
+                handle, typeIn, requestQuery, wValue, wIndex,
+                &buffer, UInt16(buffer.count), timeoutMs
+            )
+            guard rc >= 0 else {
+                throw DisplayControlError.transferFailed(
+                    String(format: "query 0x%04x/%d", wValue, wIndex), rc)
+            }
+            return Array(buffer[0..<Int(rc)])
+        }
+    }
+
     public static func currentMode() throws -> DisplayMode {
         try withDevice { handle in
             var buffer = [UInt8](repeating: 0, count: 0x40)
