@@ -645,18 +645,33 @@ final class SpatialController: ObservableObject {
             self?.handleCaptureDeath(error)
         }
 
-        do {
-            try await capture.start(
-                displayID: captureID,
-                frameRate: frameRate,
-                excludingWindowNumber: source == .glassesOnly ? window?.windowNumber : nil,
-                // In glasses-only mode the renderer draws its own cursor;
-                // SCK's would be a duplicate whenever the system cursor
-                // transiently becomes visible again.
-                showsCursor: source != .glassesOnly
-            )
-        } catch {
-            abort("\(error)")
+        // A mirror or mode fix during setup re-enumerates the displays, and
+        // ScreenCaptureKit's shareable-content list can transiently miss the
+        // display while that settles (seen live: "not shareable" two seconds
+        // after a re-mirror, on a display that was fine). Retry before
+        // giving up — a real permission problem fails all three attempts.
+        var captureError: Error?
+        for attempt in 1...3 {
+            do {
+                try await capture.start(
+                    displayID: captureID,
+                    frameRate: frameRate,
+                    excludingWindowNumber: source == .glassesOnly ? window?.windowNumber : nil,
+                    // In glasses-only mode the renderer draws its own cursor;
+                    // SCK's would be a duplicate whenever the system cursor
+                    // transiently becomes visible again.
+                    showsCursor: source != .glassesOnly
+                )
+                captureError = nil
+                break
+            } catch {
+                captureError = error
+                Self.appendLog("capture start failed (attempt \(attempt)/3): \(error)")
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+            }
+        }
+        if let captureError {
+            abort("\(captureError)")
             return
         }
 
