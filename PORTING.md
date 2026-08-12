@@ -59,3 +59,15 @@ once, and this app only has to render.
 3. D3D11 renderer with Windows Graphics Capture, 2D mode only
 4. Hotkeys and a minimal settings window
 5. Only then decide whether SBS is worth the driver problem
+
+## 120 Hz on Windows (carried over from the Mac effort, 2026-08-12)
+
+The Mac version is parked at 60 Hz: the panel's 120 Hz mode shows faint
+grey horizontal lines on motion, and the evidence (see RESEARCH.md, "Final
+call on 120 Hz") points at DP mode/timing negotiation rather than a panel
+limit — Max 1 users on PC report clean 120 Hz, one black-screen-at-120 case
+was fixed with custom timing, and 144 Hz at 1920×1080 is reachable. Windows
+has the tooling macOS lacks (CRU custom timings), so the Windows port is
+where 120 Hz should be won: plan to verify 1920×1200@120 on real hardware
+early, and document a CRU timing profile if the default EDID mode shows the
+same lines.

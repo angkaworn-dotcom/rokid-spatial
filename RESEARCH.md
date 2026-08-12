@@ -118,3 +118,22 @@ Measured end state: standalone + L+R sides at 120 Hz → 118–120 fps avg,
 experiment toggle is "No mirror (120 Hz experiment)" in More.
 Untested interaction: scaled desktop sizes (e.g. 1344×840) under
 standalone — the compositor scaling may or may not drag the rate again.
+
+### Final call on 120 Hz (Mac): parked — it's a timing-negotiation problem
+
+User-sourced findings (2026-08-12):
+
+- Rokid Max 1 hardware genuinely does 120 Hz: verified by users on PC,
+  and custom timing reaches 144 Hz at 1920×1080.
+- A Windows report of 1920×1200@120 negotiating but showing a black
+  screen was fixed with **custom timing** — so the 120 Hz faint-line
+  artifact here is most likely DP mode/timing negotiation, not the panel.
+- Station 2 is not a fix: Rokid specifies Max + Station 2 runs the whole
+  system at 90 Hz (Max reaches 120 only on other hosts).
+- Firmware cannot be updated without a Station 2 (Rokid AR app failed to
+  see the glasses from iPad and Samsung phone alike); current fw 512.
+
+Decision: **Mac version stays 60 Hz** (1:1, clean image, daily driver).
+120 Hz effort moves to the Windows port, where custom timing tools (CRU)
+exist to fix the negotiation. macOS EDID overrides could in principle do
+custom timing too — parked unless someone feels brave.
