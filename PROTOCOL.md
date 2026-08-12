@@ -1,7 +1,7 @@
 # Rokid Max — USB protocol notes
 
 Reverse-engineered on macOS 26.6 (Apple M1) against a real Rokid Max,
-serial `[serial redacted]`, firmware/version number `512` (0x200).
+serial redacted, firmware/version number `512` (0x200).
 
 ## Device identity
 
