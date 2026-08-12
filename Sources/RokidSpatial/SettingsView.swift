@@ -176,6 +176,11 @@ struct SettingsView: View {
                 Toggle("Anti-moiré resample", isOn: $controller.antiMoire)
 
                 Toggle("Performance HUD", isOn: $controller.metalHUD)
+                if controller.metalHUD != controller.metalHUDAtLaunch {
+                    Text("Takes effect after reopening the app.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 Button("Fit for sharpness") { controller.fitForSharpness() }
                     .disabled(!controller.isRunning)

@@ -193,6 +193,10 @@ final class SpatialController: ObservableObject {
     @Published var metalHUD = false {
         didSet { persist(metalHUD, "metalHUD"); applyMetalHUD() }
     }
+    /// What the loader-level MTL_HUD_ENABLED switch was set to at process
+    /// start — the HUD's actual state. The settings caption compares the
+    /// toggle against this to say "reopen the app" only when they differ.
+    let metalHUDAtLaunch = ProcessInfo.processInfo.environment["MTL_HUD_ENABLED"] == "1"
 
     /// Panel pixels per captured pixel across the virtual screen. 1.0 means
     /// the desktop maps one-to-one; below that, detail is being thrown away
