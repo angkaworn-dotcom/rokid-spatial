@@ -16,15 +16,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setUpHotkeys()
         showSettings()
 
-        // SBS runs the working desktop as a brand-new display, so a settings
-        // window remembered on the built-in — now parked below and dimmed to
-        // zero — is invisible and unreachable; the user's only way out was
-        // the emergency hotkey (seen live, first SBS session). Re-show the
-        // window once the session is up: showSettings relocates it.
+        // Standalone sessions swap the desktop out from under the settings
+        // window, leaving it on a hidden display — unreachable, and the
+        // user's only way out was the emergency hotkey (seen live). One
+        // early fix is not enough either: macOS re-applies remembered
+        // arrangements for many seconds after startup and threw the window
+        // back onto the glasses' sliver (also seen live). Retry on a
+        // schedule; each attempt acts only if the window is misplaced.
         runObserver = controller.$isRunning.sink { [weak self] running in
             guard running, let self, self.controller.standaloneActive else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.showSettings()
+            for delay in [1.0, 5.0, 10.0, 20.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    self.relocateSettingsIfNeeded()
+                }
             }
         }
 
@@ -145,20 +149,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.center()
             settingsWindow = window
         }
-        // During an SBS session, make sure the window is on the working
-        // desktop (the display at the origin — the one the eye sees). Its
-        // remembered position may be on the dark parked built-in or under
-        // the glasses overlay.
-        if controller.standaloneActive, controller.isRunning, let window = settingsWindow,
-           let target = NSScreen.screens.first(where: { $0.frame.origin == .zero }),
-           window.screen !== target {
-            var frame = window.frame
-            frame.origin = CGPoint(x: target.frame.midX - frame.width / 2,
-                                   y: target.frame.midY - frame.height / 2)
-            window.setFrame(frame, display: true)
-        }
+        relocateSettingsIfNeeded()
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// During a standalone session, make sure the settings window sits on
+    /// the wall's main desktop (the display at the origin — the one the eye
+    /// sees). Its remembered position may be on the dark parked built-in or
+    /// under the glasses overlay, and macOS's re-applies can throw it back
+    /// there after an earlier fix.
+    private func relocateSettingsIfNeeded() {
+        guard controller.standaloneActive, controller.isRunning,
+              let window = settingsWindow,
+              let target = NSScreen.screens.first(where: { $0.frame.origin == .zero }),
+              window.screen !== target else { return }
+        var frame = window.frame
+        frame.origin = CGPoint(x: target.frame.midX - frame.width / 2,
+                               y: target.frame.midY - frame.height / 2)
+        window.setFrame(frame, display: true)
+        window.orderFront(nil)
     }
 
     @objc private func recenter() {

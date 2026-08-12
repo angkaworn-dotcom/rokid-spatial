@@ -50,7 +50,9 @@ struct SettingsView: View {
             }
 
             if !controller.strandedApps.isEmpty {
-                Text("Hidden on a covered screen: \(controller.strandedApps.joined(separator: ", ")). Press Stop to get them back, or drag them onto a visible desktop.")
+                Text(WindowRescue.hasPermission
+                     ? "Hidden on a covered screen: \(controller.strandedApps.joined(separator: ", ")). Moving them back…"
+                     : "Hidden on a covered screen: \(controller.strandedApps.joined(separator: ", ")). Grant Rokid Spatial Accessibility permission (System Settings → Privacy & Security) to move them back automatically, or press Stop to get them back.")
                     .font(.caption2)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)

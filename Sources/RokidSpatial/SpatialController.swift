@@ -326,6 +326,10 @@ final class SpatialController: ObservableObject {
     /// the fix takes longer than a second.
     private var layoutFixInFlight = false
 
+    /// Dock bounces this session, capped — the bounce restarts the user's
+    /// Dock, so a stubborn window server must not turn it into a strobe.
+    private var dockBounces = 0
+
     /// Set when the Mac goes to sleep mid-session: the session is stopped
     /// cleanly before sleep and started again once the glasses re-enumerate
     /// after wake. Without this the watchdog saw the sleeping capture stream
@@ -669,6 +673,13 @@ final class SpatialController: ObservableObject {
             reason: "Realtime XR rendering")
         isRunning = true
         isStarting = false
+        // The standalone variants rescue scattered windows via the
+        // Accessibility API; surface the consent prompt now, while the user
+        // is right here starting the session. One system dialog, only until
+        // granted (consent sticks to the stable dev signature).
+        if standaloneActive, !WindowRescue.hasPermission {
+            WindowRescue.requestPermission()
+        }
         let size = displays.glassesPixelSize
         setStatus(String(format: "Running — %.0f×%.0f @ %d Hz",
                          size.width, size.height, frameRate))
@@ -723,9 +734,6 @@ final class SpatialController: ObservableObject {
                         // variants' content rate down.
                         _ = displays.mirrorBuiltinOntoWorking(captureID)
                     }
-                    // The shuffle can leave the Dock on a hidden display
-                    // (seen live: the glasses' sliver — "Dock หาไม่เจอ").
-                    displays.rehomeDockIfHidden(hiddenDisplays: parked)
                 }.value
             } else {
                 // Side screens, for those whose displays came up: right sits
@@ -1234,18 +1242,26 @@ final class SpatialController: ObservableObject {
                     }
                 }
                 // Plain glasses-only has one display — nowhere to get
-                // stranded. The 90/120 standalone variants park the built-in
-                // dark, and windows left there are invisible; list their
-                // owners. (SBS-60 merges that desktop away instead.)
+                // stranded. The standalone variants have hidden desktops
+                // (the glasses' sliver; the parked dark built-in for 90/120)
+                // and macOS's re-applies scatter windows onto them (seen
+                // live: Discord on the sliver); list their owners.
                 self.strandedApps = {
                     if self.source != .glassesOnly {
                         return self.displays.strandedWindowOwners()
                     }
-                    if self.standaloneActive, self.sbsMode != .sbs60,
-                       let desk = self.displays.deskDisplayID {
-                        return self.displays.strandedWindowOwners(on: desk)
+                    guard self.standaloneActive else { return [] }
+                    let mainID = self.stereoActive ? self.virtualDisplay.displayID
+                                                   : self.displays.glassesDisplayID
+                    guard let mainID else { return [] }
+                    var owners: [String] = []
+                    for hidden in self.standaloneParked(excluding: mainID) {
+                        for owner in self.displays.strandedWindowOwners(on: hidden)
+                        where !owners.contains(owner) {
+                            owners.append(owner)
+                        }
                     }
-                    return []
+                    return owners
                 }()
                 if let renderer = self.renderer, self.capture.pointWidth > 0 {
                     self.pixelScale = renderer.renderedWidth / Float(self.capture.pointWidth)
@@ -1352,6 +1368,28 @@ final class SpatialController: ObservableObject {
                     }
                     unhealthyTicks = 0
                     return
+                }
+                // Reaching here means the wall is settled this tick — the
+                // right moment for the visibility rescues. Bounced or moved
+                // too early they just land on the still-scrambled
+                // arrangement again (seen live).
+                if standaloneActive, let mainID {
+                    let hidden = standaloneParked(excluding: mainID)
+                    if dockBounces < 3,
+                       displays.rehomeDockIfHidden(hiddenDisplays: hidden) {
+                        dockBounces += 1
+                    }
+                    // "Everything on my screen must not disappear": move any
+                    // window macOS scattered onto a hidden desktop back to
+                    // the wall's centre. Needs the one-time Accessibility
+                    // consent; without it the Settings list still names the
+                    // hidden apps.
+                    if !strandedApps.isEmpty, WindowRescue.hasPermission {
+                        _ = WindowRescue.rescueWindows(
+                            from: hidden.map { CGDisplayBounds($0) },
+                            to: CGDisplayBounds(mainID)
+                        ) { Self.appendLog($0) }
+                    }
                 }
             }
         } else {

@@ -688,12 +688,16 @@ final class DisplayManager {
     /// standalone shuffle that can be a hidden one (seen live: the glasses'
     /// sliver desktop), which takes the Dock and its menus out of reach.
     /// Detect it and bounce the Dock — it respawns on the current main
-    /// display, which is the wall's centre screen.
-    func rehomeDockIfHidden(hiddenDisplays: [CGDirectDisplayID]) {
+    /// display, which is the wall's centre screen. Only worth calling once
+    /// the wall layout is settled: bounced too early (seen live), the Dock
+    /// respawns onto the still-scrambled arrangement and lands hidden again.
+    /// Returns true if it acted.
+    @discardableResult
+    func rehomeDockIfHidden(hiddenDisplays: [CGDirectDisplayID]) -> Bool {
         guard !hiddenDisplays.isEmpty,
               let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly],
                                                     kCGNullWindowID) as? [[String: Any]]
-        else { return }
+        else { return false }
         let regions = hiddenDisplays.map { CGDisplayBounds($0) }
         let dockHidden = list.contains { window in
             guard let owner = window[kCGWindowOwnerName as String] as? String,
@@ -707,12 +711,13 @@ final class DisplayManager {
             let centre = CGPoint(x: x + width / 2, y: y + height / 2)
             return regions.contains { $0.contains(centre) }
         }
-        guard dockHidden else { return }
+        guard dockHidden else { return false }
         log?("standalone: the Dock parked on a hidden display — bouncing it home")
         let kill = Process()
         kill.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
         kill.arguments = ["Dock"]
         try? kill.run()
+        return true
     }
 
     private func configure(_ body: (CGDisplayConfigRef?) -> CGError) throws {
