@@ -247,6 +247,12 @@ final class SpatialController: ObservableObject {
     /// Built-in panel brightness before glasses-only mode dimmed it to zero.
     private var savedBrightness: Float?
 
+    /// Consecutive seconds the renderer has been stuck near half of the
+    /// 120 Hz target, plus a cooldown on the recovery attempt. See
+    /// `maybeKickScanout` for the story.
+    private var lowFlipTicks = 0
+    private var lastScanoutKick = Date.distantPast
+
     /// Set when the Mac goes to sleep mid-session: the session is stopped
     /// cleanly before sleep and started again once the glasses re-enumerate
     /// after wake. Without this the watchdog saw the sleeping capture stream
@@ -1023,9 +1029,33 @@ final class SpatialController: ObservableObject {
                 if let renderer = self.renderer, self.capture.pointWidth > 0 {
                     self.pixelScale = renderer.renderedWidth / Float(self.capture.pointWidth)
                 }
+                self.maybeKickScanout()
                 self.healthCheck()
             }
         }
+    }
+
+    /// The window server sometimes stops flipping the glasses display at
+    /// 120 Hz and settles at the mirror set's 60 Hz member rate — the render
+    /// thread then spends ~3/4 of its time blocked in `nextDrawable`, every
+    /// frame is shown twice, and high-contrast edges ghost into faint grey
+    /// double lines whenever the head moves (confirmed: the lines vanish at
+    /// 60 Hz, where frames and refreshes are 1:1). The state is sticky — it
+    /// survives Stop/Start and even an app relaunch. Re-ordering the overlay
+    /// window pokes the window server into re-evaluating direct scanout,
+    /// which is what 120 Hz flips rode on when they worked.
+    private func maybeKickScanout() {
+        guard isRunning, source == .glassesOnly, refreshRate == 120,
+              Date() >= watchdogArmsAt, let window else { return }
+        if renderFPS >= 100 { lowFlipTicks = 0; return }
+        lowFlipTicks += 1
+        guard lowFlipTicks >= 10,
+              Date().timeIntervalSince(lastScanoutKick) > 60 else { return }
+        lastScanoutKick = Date()
+        lowFlipTicks = 0
+        Self.appendLog("scanout kick — flips stuck near 60 Hz, re-ordering the overlay")
+        window.orderOut(nil)
+        window.orderFrontRegardless()
     }
 
     /// Tear everything down the moment the overlay stops being something the
