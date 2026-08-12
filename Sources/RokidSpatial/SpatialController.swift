@@ -806,7 +806,7 @@ final class SpatialController: ObservableObject {
                 // Mirroring stays — it is the desired end state, so there is
                 // no enforcement wait and stop is immediate. The standalone
                 // experiment re-mirrors first to land in the same state.
-                displays.restorePanelOnly()
+                displays.restorePanelOnly(remirror: sbsActive)
                 setStatus("Idle")
             } else {
                 setStatus("Restoring displays…")
@@ -845,7 +845,9 @@ final class SpatialController: ObservableObject {
             switch self.source {
             case .mirror: captureID = self.displays.deskDisplayID
             case .virtualDesktop: captureID = self.virtualDisplay.displayID
-            case .glassesOnly: captureID = self.displays.glassesDisplayID
+            case .glassesOnly:
+                captureID = self.sbsActive ? self.virtualDisplay.displayID
+                                           : self.displays.glassesDisplayID
             }
             guard let captureID else { return }  // the watchdog handles this
             do {
@@ -853,7 +855,8 @@ final class SpatialController: ObservableObject {
                     displayID: captureID,
                     frameRate: self.frameRate,
                     excludingWindowNumber: self.source == .glassesOnly
-                        ? self.window?.windowNumber : nil
+                        ? self.window?.windowNumber : nil,
+                    showsCursor: self.source != .glassesOnly
                 )
                 self.frameClock.mark()
                 Self.appendLog("Capture restarted")
@@ -895,7 +898,7 @@ final class SpatialController: ObservableObject {
         isRunning = false
         if source == .glassesOnly {
             // Mirroring is the desired end state here: no fight, no helper.
-            displays.restorePanelOnly()
+            displays.restorePanelOnly(remirror: sbsActive)
             return
         }
         do {
@@ -920,7 +923,7 @@ final class SpatialController: ObservableObject {
         teardown()
         restoreBrightness()
         if source == .glassesOnly {
-            displays.restorePanelOnly()
+            displays.restorePanelOnly(remirror: sbsActive)
         } else {
             displays.restore()
         }
@@ -1139,19 +1142,22 @@ final class SpatialController: ObservableObject {
         var problems: [String] = []
 
         if let glassesID = displays.glassesDisplayID {
-            // In glasses-only mode the mirror set is the *desired* state, not
-            // a fault — the desk-display checks below don't apply either,
-            // because the built-in is just a (dimmed) mirror of the glasses.
-            if source != .glassesOnly, CGDisplayIsInMirrorSet(glassesID) != 0 {
+            // Modes that must stay unmirrored (extended sources, SBS-90)
+            // treat any mirror set as a fault to undo; plain glasses-only
+            // treats the mirror as the desired state. SBS must never
+            // re-mirror: a mirror set harmonizes its flip rate down to the
+            // 60 Hz built-in member and the 90 Hz mode is wasted.
+            if source != .glassesOnly || sbsActive,
+               CGDisplayIsInMirrorSet(glassesID) != 0 {
                 // Try to undo it before treating it as fatal — macOS often
                 // reinstates mirroring transiently while a reconfiguration
                 // settles, and recovering beats tearing the session down.
                 mirrorRecoveryAttempts += 1
                 if mirrorRecoveryAttempts <= 2, displays.reassertUnmirrored() {
-                    // The re-apply also made the glasses the main display,
-                    // which moved the menu bar underneath the overlay. Put
-                    // the layout back too, not just the mirroring.
-                    applyArrangement()
+                    // The re-apply also scrambled the arrangement. SBS's wall
+                    // is put back by the layout check below on the next tick;
+                    // the extended sources fix theirs here.
+                    if !sbsActive { applyArrangement() }
                     setStatus("macOS re-enabled mirroring; un-mirrored it again.")
                     unhealthyTicks = 0
                     return
@@ -1161,12 +1167,12 @@ final class SpatialController: ObservableObject {
             if CGDisplayIsActive(glassesID) == 0 {
                 problems.append("the glasses display went inactive")
             }
-            // The inverse fight: glasses-only *wants* the built-in mirrored
-            // (dark, no second desktop), and macOS keeps re-applying the
-            // unmirrored arrangement it remembered from the standalone
+            // The inverse fight: plain glasses-only *wants* the built-in
+            // mirrored (dark, no second desktop), and macOS keeps re-applying
+            // the unmirrored arrangement it remembered from the standalone
             // experiments. Capped so a truly stubborn window server cannot
-            // make this loop forever.
-            if source == .glassesOnly, mirrorRecoveryAttempts <= 4,
+            // make this loop forever. Never in SBS — see above.
+            if source == .glassesOnly, !sbsActive, mirrorRecoveryAttempts <= 4,
                displays.reassertGlassesOnlyMirror() {
                 mirrorRecoveryAttempts += 1
                 // The re-mirror is itself a reconfiguration; let it settle
@@ -1175,23 +1181,30 @@ final class SpatialController: ObservableObject {
                 return
             }
             // The main screen stays at the centre of the wall. When macOS
-            // re-applies a remembered arrangement that scatters the
-            // displays, put them back and re-derive the cursor mapping,
-            // whose display bounds were captured at attach time.
+            // re-applies a remembered arrangement that scatters the displays,
+            // put them back and re-derive the cursor mapping, whose display
+            // bounds were captured at attach time. In SBS the wall's main is
+            // the working desktop, and the glasses + built-in park below it.
             if source == .glassesOnly, !layoutFixInFlight {
                 let sides = sideScreens.indices.compactMap { index -> (id: CGDirectDisplayID, isRight: Bool)? in
                     guard let id = sideDisplays[index].displayID else { return nil }
                     return (id, index == 0)
                 }
-                if displays.wallLayoutIsBroken(main: glassesID, sides: sides) {
+                let mainID = sbsActive ? virtualDisplay.displayID : glassesID
+                let parked = sbsActive
+                    ? [displays.glassesDisplayID, displays.deskDisplayID]
+                        .compactMap { $0 }.filter { $0 != mainID }
+                    : []
+                if let mainID,
+                   displays.wallLayoutIsBroken(main: mainID, sides: sides, parked: parked) {
                     layoutFixInFlight = true
                     Self.appendLog("layout: the wall drifted — recentring the main screen")
                     Task {
                         await Task.detached { [displays] in
-                            displays.fixWallLayout(main: glassesID, sides: sides)
+                            displays.fixWallLayout(main: mainID, sides: sides, parked: parked)
                         }.value
                         if let renderer = self.renderer {
-                            self.attachRenderedCursor(to: renderer, displayID: glassesID)
+                            self.attachRenderedCursor(to: renderer, displayID: mainID)
                         }
                         self.layoutFixInFlight = false
                     }
@@ -1238,7 +1251,7 @@ final class SpatialController: ObservableObject {
         teardown()
         restoreBrightness()
         if source == .glassesOnly {
-            displays.restorePanelOnly()
+            displays.restorePanelOnly(remirror: sbsActive)
         } else {
             displays.restore()
         }
