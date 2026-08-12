@@ -25,6 +25,12 @@ final class SpatialController: ObservableObject {
     /// Apps whose windows are hidden underneath the overlay on the glasses.
     @Published var strandedApps: [String] = []
 
+    /// True while macOS Low Power Mode is active. It silently downclocks the
+    /// whole machine and halves the session's frame rate — twice diagnosed
+    /// live as a "mystery" 30 fps. Surfaced loudly instead; no API exists
+    /// for an app to opt out.
+    @Published var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+
     @Published var virtualResolution: VirtualResolution = .r1440x900 { didSet { persist(virtualResolution.rawValue, "virtualResolution") } }
 
     /// Put the menu bar on the virtual desktop, so the glasses become the
@@ -410,6 +416,17 @@ final class SpatialController: ObservableObject {
         workspace.addObserver(forName: NSWorkspace.didWakeNotification,
                               object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.systemDidWake() }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .NSProcessInfoPowerStateDidChange,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                let active = ProcessInfo.processInfo.isLowPowerModeEnabled
+                self?.lowPowerMode = active
+                Self.appendLog("power: Low Power Mode \(active ? "ON — expect ~half frame rate" : "off")")
+            }
         }
     }
 

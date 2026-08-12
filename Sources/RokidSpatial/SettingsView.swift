@@ -49,6 +49,13 @@ struct SettingsView: View {
                                      ? Color.orange : .secondary)
             }
 
+            if controller.lowPowerMode {
+                Text("Low Power Mode is limiting the frame rate (~30 fps). Plug in, or set System Settings → Battery → Low Power Mode to Never.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if !controller.strandedApps.isEmpty {
                 Text(WindowRescue.hasPermission
                      ? "Hidden on a covered screen: \(controller.strandedApps.joined(separator: ", ")). Moving them back…"
