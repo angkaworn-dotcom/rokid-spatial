@@ -407,14 +407,24 @@ final class SpatialController: ObservableObject {
         // Adding a display is itself a reconfiguration, and macOS responds to
         // those by reinstating its remembered arrangement — mirroring included.
         // Creating it after un-mirroring simply undoes the un-mirroring.
-        if source == .virtualDesktop {
-            setStatus("Creating the virtual desktop…")
+        // SBS-90's working desktop obeys the same rule: create first, fight once.
+        if source == .virtualDesktop || sbsActive {
+            setStatus(sbsActive ? "Creating the 90 Hz working desktop…"
+                                : "Creating the virtual desktop…")
             do {
-                try virtualDisplay.create(
-                    width: virtualResolution.width,
-                    height: virtualResolution.height,
-                    hiDPI: virtualResolution.hiDPI
-                )
+                if sbsActive {
+                    // 1920×1200 matches the per-eye panel raster exactly, and
+                    // 90 Hz matches the panel: a 60 Hz virtual display in the
+                    // set drags the whole composition down (measured 2026-08-12).
+                    try virtualDisplay.create(width: 1920, height: 1200,
+                                              hiDPI: false, refreshRate: 90)
+                } else {
+                    try virtualDisplay.create(
+                        width: virtualResolution.width,
+                        height: virtualResolution.height,
+                        hiDPI: virtualResolution.hiDPI
+                    )
+                }
             } catch {
                 setStatus("\(error)", isError: true)
                 isStarting = false
@@ -422,16 +432,19 @@ final class SpatialController: ObservableObject {
             }
         }
 
-        let displayMode = DisplayMode.sameOnBoth
-        setStatus("Switching the glasses to 60 Hz…")
+        let displayMode: DisplayMode = sbsActive ? .highRefreshRateSBS : .sameOnBoth
+        setStatus(sbsActive ? "Switching the glasses to 90 Hz SBS…"
+                            : "Switching the glasses to 60 Hz…")
 
         // Display reconfiguration blocks for a few seconds while the panel
         // renegotiates, so keep it off the main thread.
         // Applied to the glasses display after the panel settles; the
         // requested size falls back to the nearest one the panel offers.
-        Task.detached(priority: .userInitiated) { [displays, source] in
+        Task.detached(priority: .userInitiated) { [displays, source, sbsActive] in
             do {
-                if source == .glassesOnly {
+                if sbsActive {
+                    try displays.prepareSBS()
+                } else if source == .glassesOnly {
                     try displays.prepareGlassesOnly(mode: displayMode)
                 } else {
                     // Let macOS enumerate the new display before rearranging.
@@ -452,27 +465,38 @@ final class SpatialController: ObservableObject {
         // what the glasses can resolve, so nothing is downscaled on the way to
         // your eye, and the physical desktop is left completely alone.
         let captureID: CGDirectDisplayID
-        switch source {
-        case .mirror:
-            guard let deskID = displays.deskDisplayID else {
-                abort("No desktop display to mirror.")
-                return
-            }
-            captureID = deskID
-        case .virtualDesktop:
+        if sbsActive {
+            // Mode 4's own desktop is a 16:5 sliver (1920×600 points) and
+            // unusable as a workspace; the user works on the 90 Hz virtual
+            // display and the overlay projects it once per eye.
             guard let id = virtualDisplay.displayID else {
-                abort("The virtual display did not report a display ID.")
+                abort("The working desktop did not report a display ID.")
                 return
             }
             captureID = id
-        case .glassesOnly:
-            // Capture the glasses' own display — the overlay is excluded from
-            // the capture per-window, which is what breaks the recursion.
-            guard let id = displays.glassesDisplayID else {
-                abort("The glasses display disappeared during setup.")
-                return
+        } else {
+            switch source {
+            case .mirror:
+                guard let deskID = displays.deskDisplayID else {
+                    abort("No desktop display to mirror.")
+                    return
+                }
+                captureID = deskID
+            case .virtualDesktop:
+                guard let id = virtualDisplay.displayID else {
+                    abort("The virtual display did not report a display ID.")
+                    return
+                }
+                captureID = id
+            case .glassesOnly:
+                // Capture the glasses' own display — the overlay is excluded
+                // from the capture per-window, which breaks the recursion.
+                guard let id = displays.glassesDisplayID else {
+                    abort("The glasses display disappeared during setup.")
+                    return
+                }
+                captureID = id
             }
-            captureID = id
         }
 
         if source != .glassesOnly {
@@ -483,7 +507,11 @@ final class SpatialController: ObservableObject {
             // Side displays are created at exactly the main desktop's
             // effective size, so all screens match and windows keep their
             // size when dragged across. Failure never ends the session.
-            let effective = displays.glassesDesktopSize
+            // SBS: sides match the working desktop, not the glasses' 16:5
+            // sliver. All virtual displays run at the panel's rate — a 60 Hz
+            // member drags composition down even unmirrored.
+            let effective = sbsActive ? (width: 1920, height: 1200)
+                                      : displays.glassesDesktopSize
             for index in sideScreens.indices {
                 do {
                     // Match the panel's rate: a 60 Hz virtual display in the
@@ -513,7 +541,9 @@ final class SpatialController: ObservableObject {
             abort("Could not create the Metal renderer.")
             return
         }
-        renderer.stereo = false
+        // SBS: the framebuffer holds both eyes across its width; the stereo
+        // path renders per-eye viewports with ±ipd/2 offsets.
+        renderer.stereo = sbsActive
         renderer.lookAhead = lookAhead
         renderer.steady = steady
         renderer.antiMoire = antiMoire
@@ -577,28 +607,46 @@ final class SpatialController: ObservableObject {
                 BuiltinBrightness.set(deskID, to: 0)
             }
 
-            // Side screens, for those whose displays came up: right sits to
-            // the right of the main desktop and left to the left, so the
-            // pointer leaves on the side the eye sees the screen. Position
-            // everything first, then re-assert the main desktop's size —
-            // every reconfiguration invites macOS to revert it.
-            for index in sideScreens.indices {
-                guard let sideID = sideDisplays[index].displayID else { continue }
-                if index == 0 {
-                    displays.positionToRight(sideID, of: captureID)
-                } else {
-                    displays.positionToLeft(sideID, of: captureID)
+            if sbsActive {
+                // The SBS wall in one batched reconfiguration: working
+                // desktop centred at the origin, sides flush left/right,
+                // glasses and built-in parked below. And NO mirror set
+                // anywhere — re-mirroring here would harmonize the flip
+                // rate straight back down to 60.
+                let sides = sideScreens.indices.compactMap { index -> (id: CGDirectDisplayID, isRight: Bool)? in
+                    guard let id = sideDisplays[index].displayID else { return nil }
+                    return (id, index == 0)
                 }
-            }
-            if !sideScreens.indices.isEmpty {
+                let parked = [displays.glassesDisplayID, displays.deskDisplayID]
+                    .compactMap { $0 }.filter { $0 != captureID }
                 await Task.detached { [displays] in
-                    displays.reapplyDesktopSize()
+                    displays.fixWallLayout(main: captureID, sides: sides, parked: parked)
                 }.value
+            } else {
+                // Side screens, for those whose displays came up: right sits
+                // to the right of the main desktop and left to the left, so
+                // the pointer leaves on the side the eye sees the screen.
+                // Position everything first, then re-assert the main
+                // desktop's size — every reconfiguration invites macOS to
+                // revert it.
+                for index in sideScreens.indices {
+                    guard let sideID = sideDisplays[index].displayID else { continue }
+                    if index == 0 {
+                        displays.positionToRight(sideID, of: captureID)
+                    } else {
+                        displays.positionToLeft(sideID, of: captureID)
+                    }
+                }
+                if !sideScreens.indices.isEmpty {
+                    await Task.detached { [displays] in
+                        displays.reapplyDesktopSize()
+                    }.value
+                }
+                // Creating and positioning the side displays invites macOS to
+                // re-apply its remembered (unmirrored) arrangement; put the
+                // built-in back into the mirror set before capture starts.
+                _ = displays.reassertGlassesOnlyMirror()
             }
-            // Creating and positioning the side displays invites macOS to
-            // re-apply its remembered (unmirrored) arrangement; put the
-            // built-in back into the mirror set before capture starts.
-            _ = displays.reassertGlassesOnlyMirror()
             for index in sideScreens.indices {
                 guard let sideID = sideDisplays[index].displayID else { continue }
                 let sideCapture = sideCaptures[index]
