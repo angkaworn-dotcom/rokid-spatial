@@ -74,6 +74,11 @@ final class DisplayManager {
         return all.first { CGDisplayIsBuiltin($0) == 0 }
     }
 
+    /// Whether a display the session could run on is currently online. The
+    /// wake path polls this: the glasses re-enumerate a few seconds after the
+    /// Mac wakes, and restarting before they exist just fails.
+    var glassesArePresent: Bool { findGlassesDisplay() != nil }
+
     private func findDeskDisplay(excluding glasses: CGDirectDisplayID) -> CGDirectDisplayID? {
         let all = onlineDisplays().filter { $0 != glasses }
         return all.first { CGDisplayIsBuiltin($0) != 0 } ?? all.first

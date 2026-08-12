@@ -235,6 +235,12 @@ final class SpatialController: ObservableObject {
     /// Built-in panel brightness before glasses-only mode dimmed it to zero.
     private var savedBrightness: Float?
 
+    /// Set when the Mac goes to sleep mid-session: the session is stopped
+    /// cleanly before sleep and started again once the glasses re-enumerate
+    /// after wake. Without this the watchdog saw the sleeping capture stream
+    /// as a fault and tore the session down for good.
+    private var resumeOnWake = false
+
     /// The panel always runs 1920×1200 @ 120 Hz (mode 3).
     ///
     /// A 90 Hz side-by-side stereo mode existed and was removed after real
@@ -301,6 +307,58 @@ final class SpatialController: ObservableObject {
         screen.settleSpeed = settleSpeed
         screen.ipd = ipd
         screen.motionLock = motionLock
+
+        // Sleep/wake: willSleep is delivered on the main queue before the
+        // machine actually sleeps, so the teardown starts while everything
+        // is still awake to be torn down.
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspace.addObserver(forName: NSWorkspace.willSleepNotification,
+                              object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.systemWillSleep() }
+        }
+        workspace.addObserver(forName: NSWorkspace.didWakeNotification,
+                              object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.systemDidWake() }
+        }
+    }
+
+    // MARK: Sleep/wake
+
+    /// Stop cleanly before the machine sleeps. A full stop-and-restart reuses
+    /// every hardened setup path (mode re-assertion, mirror handling, capture
+    /// auto-restart) instead of trying to keep a session alive across a power
+    /// cycle that may change display IDs and revert panel modes.
+    private func systemWillSleep() {
+        guard isRunning || isStarting else { return }
+        Self.appendLog("Sleep — suspending the session, will restart on wake")
+        resumeOnWake = true
+        stop()
+    }
+
+    private func systemDidWake() {
+        guard resumeOnWake else { return }
+        resumeOnWake = false
+        Self.appendLog("Wake — waiting for the glasses display")
+        setStatus("Waking — waiting for the glasses…")
+        Task {
+            // Wait for the pre-sleep teardown to finish and the glasses to
+            // re-enumerate; both take a few seconds after wake.
+            let deadline = Date().addingTimeInterval(30)
+            while Date() < deadline {
+                if !self.isRunning, !self.isStarting, self.displays.glassesArePresent { break }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            guard !self.isRunning, !self.isStarting else { return }
+            guard self.displays.glassesArePresent else {
+                self.setStatus("Glasses not detected after wake — press Start once they are connected.",
+                               isError: true)
+                return
+            }
+            // Let the display enumeration settle before reconfiguring it.
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            Self.appendLog("Wake — glasses are back, restarting")
+            self.start()
+        }
     }
 
     // MARK: Lifecycle
