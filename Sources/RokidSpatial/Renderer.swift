@@ -50,6 +50,26 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
     return float4(tex.sample(smp, in.uv).rgb, 1.0);
 }
 
+// Anti-moiré variant: a 4-tap rotated-grid supersample, taps spread across
+// this pixel's texture footprint via screen-space UV gradients. At ~1:1
+// scale plain bilinear makes the desktop's pixel rows beat against the
+// panel raster whenever the head moves — faint grey bands that crawl with
+// sub-pixel sampling phase. Averaging four offset taps flattens the beat
+// at the cost of a slight softening.
+fragment float4 fragmentSmooth(VertexOut in [[stage_in]],
+                               texture2d<float, access::sample> tex [[texture(0)]])
+{
+    constexpr sampler smp(mag_filter::linear,
+                          min_filter::linear,
+                          address::clamp_to_edge);
+    float2 dx = dfdx(in.uv), dy = dfdy(in.uv);
+    float3 c = tex.sample(smp, in.uv + 0.125*dx + 0.375*dy).rgb
+             + tex.sample(smp, in.uv - 0.375*dx + 0.125*dy).rgb
+             + tex.sample(smp, in.uv - 0.125*dx - 0.375*dy).rgb
+             + tex.sample(smp, in.uv + 0.375*dx - 0.125*dy).rgb;
+    return float4(c * 0.25, 1.0);
+}
+
 // The cursor sprite keeps its alpha — it is blended over the desktop quad.
 fragment float4 fragmentCursor(VertexOut in [[stage_in]],
                                texture2d<float, access::sample> tex [[texture(0)]])
@@ -73,7 +93,15 @@ final class Renderer: NSObject, MTKViewDelegate {
     let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
+    private let smoothPipeline: MTLRenderPipelineState
     private let cursorPipeline: MTLRenderPipelineState
+
+    /// Selects the anti-moiré fragment path; flippable live from settings.
+    var antiMoire = false
+
+    /// The frame-duration budget a draw is judged against, matching the
+    /// panel's configured refresh rate.
+    var targetFPS = 120
     private let vertexBuffer: MTLBuffer
     private var textureCache: CVMetalTextureCache?
 
@@ -216,6 +244,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
             pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
 
+            descriptor.fragmentFunction = library.makeFunction(name: "fragmentSmooth")
+            smoothPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+
             // Same vertex path, alpha-blended fragment for the cursor sprite.
             // CGImage-sourced textures are premultiplied, hence .one.
             descriptor.fragmentFunction = library.makeFunction(name: "fragmentCursor")
@@ -307,7 +338,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         lastDrawTime = now
         statsLock.lock()
         framesDrawn += 1
-        if dt > 1.5 / 120 { longFrames += 1 }
+        if dt > 1.5 / Float(targetFPS) { longFrames += 1 }
         statsLock.unlock()
 
         var head = filter.predictedRelativeOrientation(lookAhead: lookAhead)
@@ -434,7 +465,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                                        length: MemoryLayout<simd_float4x4>.size,
                                        index: 1)
 
-                encoder.setRenderPipelineState(pipeline)
+                encoder.setRenderPipelineState(antiMoire ? smoothPipeline : pipeline)
                 encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
                 encoder.setFragmentTexture(texture, index: 0)
                 encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0,

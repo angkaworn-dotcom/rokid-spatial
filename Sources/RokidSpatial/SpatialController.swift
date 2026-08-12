@@ -49,6 +49,14 @@ final class SpatialController: ObservableObject {
     @Published var desktopSize = "1920×1200" { didSet { persist(desktopSize, "desktopSize") } }
     @Published var desktopSizes: [String] = ["1920×1200"]
 
+    /// Panel refresh rate: 120 Hz (mode 3, 1920×1200) or 60 Hz (mode 0,
+    /// 1920×1080). 60 Hz exists as an experiment: when the compositor caps
+    /// rendering at 60 fps, a 120 Hz panel shows every frame twice and
+    /// high-contrast edges ghost into faint double lines during head turns;
+    /// at 60 Hz the render and the panel are 1:1. The panel has no plain
+    /// 90 Hz mode — 90 exists only bundled with SBS.
+    @Published var refreshRate = 120 { didSet { persist(refreshRate, "refreshRate") } }
+
     private static func parseSize(_ label: String) -> (width: Int, height: Int)? {
         let parts = label.split(separator: "×").compactMap { Int($0) }
         guard parts.count == 2 else { return nil }
@@ -86,6 +94,10 @@ final class SpatialController: ObservableObject {
     @Published var lookAhead: Float = 0 { didSet { renderer?.lookAhead = lookAhead; persist(lookAhead, "lookAhead") } }
     /// Anti-shake: display-pose smoothing time constant, seconds.
     @Published var steady: Float = 0.015 { didSet { renderer?.steady = steady; persist(steady, "steady") } }
+    /// 4-tap supersampling against the faint grey moiré bands that appear
+    /// whenever the head moves and the desktop's pixel rows beat against the
+    /// panel raster. Live-switchable so the difference can be judged by eye.
+    @Published var antiMoire = false { didSet { renderer?.antiMoire = antiMoire; persist(antiMoire, "antiMoire") } }
     @Published var motionLock: Float = 0 { didSet { screen.motionLock = motionLock; persist(motionLock, "motionLock") } }
     /// Angular gap between neighbouring screens, degrees. Zero makes the
     /// three screens one continuous wall.
@@ -250,7 +262,8 @@ final class SpatialController: ObservableObject {
     /// the whole desktop to 3840×1200, halving per-eye sharpness. The stereo
     /// render path (`Renderer.stereo`, `VirtualScreen.ipd`) survives in case
     /// it ever earns its way back; the protocol side stays in PROTOCOL.md.
-    static let frameRate = 120
+    /// The 60 Hz option (`refreshRate`) came later, as a ghosting experiment.
+    private var frameRate: Int { refreshRate }
 
     // MARK: Persistence
 
@@ -271,6 +284,7 @@ final class SpatialController: ObservableObject {
         if d.object(forKey: "virtualIsMain") != nil { virtualIsMain = d.bool(forKey: "virtualIsMain") }
         if d.object(forKey: "doubleTapRecenter") != nil { doubleTapRecenter = d.bool(forKey: "doubleTapRecenter") }
         if d.object(forKey: "curved") != nil { curved = d.bool(forKey: "curved") }
+        if d.object(forKey: "antiMoire") != nil { antiMoire = d.bool(forKey: "antiMoire") }
         if let v = SideScreens(rawValue: d.string(forKey: "sideScreens") ?? "") {
             sideScreens = v
         } else if d.bool(forKey: "sideScreen") {
@@ -279,6 +293,7 @@ final class SpatialController: ObservableObject {
         }
         if let v = d.string(forKey: "desktopSize") { desktopSize = v }
         if let v = d.stringArray(forKey: "desktopSizes") { desktopSizes = v }
+        if d.object(forKey: "refreshRate") != nil { refreshRate = d.integer(forKey: "refreshRate") }
 
         func load(_ key: String, into value: inout Float) {
             if d.object(forKey: key) != nil { value = d.float(forKey: key) }
@@ -406,14 +421,14 @@ final class SpatialController: ObservableObject {
             }
         }
 
-        let displayMode = DisplayMode.highRefreshRate
-        setStatus("Switching the glasses to 120 Hz…")
+        let displayMode: DisplayMode = refreshRate == 60 ? .sameOnBoth : .highRefreshRate
+        setStatus("Switching the glasses to \(refreshRate) Hz…")
 
         // Display reconfiguration blocks for a few seconds while the panel
         // renegotiates, so keep it off the main thread.
         // Applied to the glasses display after the panel settles; the
         // requested size falls back to the nearest one the panel offers.
-        let requestedSize = Self.parseSize(desktopSize)
+        let requestedSize = refreshRate == 60 ? nil : Self.parseSize(desktopSize)
 
         Task.detached(priority: .userInitiated) { [displays, source] in
             do {
@@ -506,6 +521,8 @@ final class SpatialController: ObservableObject {
         renderer.stereo = false
         renderer.lookAhead = lookAhead
         renderer.steady = steady
+        renderer.antiMoire = antiMoire
+        renderer.targetFPS = frameRate
         renderer.sideGap = screenGap * .pi / 180
         self.renderer = renderer
 
@@ -523,7 +540,7 @@ final class SpatialController: ObservableObject {
         do {
             try await capture.start(
                 displayID: captureID,
-                frameRate: Self.frameRate,
+                frameRate: frameRate,
                 excludingWindowNumber: source == .glassesOnly ? window?.windowNumber : nil,
                 // In glasses-only mode the renderer draws its own cursor;
                 // SCK's would be a duplicate whenever the system cursor
@@ -547,7 +564,7 @@ final class SpatialController: ObservableObject {
         isStarting = false
         let size = displays.glassesPixelSize
         setStatus(String(format: "Running — %.0f×%.0f @ %d Hz",
-                         size.width, size.height, Self.frameRate))
+                         size.width, size.height, frameRate))
         startRateTimer()
 
         // Last, after everything is confirmed running: glasses-only mode's
@@ -739,7 +756,7 @@ final class SpatialController: ObservableObject {
             do {
                 try await self.capture.start(
                     displayID: captureID,
-                    frameRate: Self.frameRate,
+                    frameRate: self.frameRate,
                     excludingWindowNumber: self.source == .glassesOnly
                         ? self.window?.windowNumber : nil
                 )
@@ -938,7 +955,7 @@ final class SpatialController: ObservableObject {
                            device: renderer.device)
         view.colorPixelFormat = .bgra8Unorm
         view.framebufferOnly = true
-        view.preferredFramesPerSecond = Self.frameRate
+        view.preferredFramesPerSecond = frameRate
         view.enableSetNeedsDisplay = false
         view.isPaused = false
         view.delegate = renderer

@@ -211,6 +211,7 @@ final class DisplayManager {
     private(set) var availableDesktopSizes: [(width: Int, height: Int)] = []
 
     func prepareGlassesOnly(mode: DisplayMode, desktopSize: (width: Int, height: Int)? = nil) throws {
+        availableDesktopSizes = []
         previousMode = try? RokidDisplay.currentMode()
         try RokidDisplay.setMode(mode)
         Thread.sleep(forTimeInterval: 3.0)
@@ -237,7 +238,11 @@ final class DisplayManager {
         // upscales to the panel's native raster. The panel never sees
         // anything but its own timing — this only changes the framebuffer
         // the desktop is drawn into.
-        if let all = CGDisplayCopyAllDisplayModes(glassesID, nil) as? [CGDisplayMode] {
+        // The scaled-size list (and the 16:10 filter it relies on) only makes
+        // sense in the 120 Hz mode; 60 Hz (mode 0) runs the panel's native
+        // 16:9 raster and skips desktop-size selection entirely.
+        if mode == .highRefreshRate,
+           let all = CGDisplayCopyAllDisplayModes(glassesID, nil) as? [CGDisplayMode] {
             availableDesktopSizes = all
                 .filter { $0.width * 10 == $0.height * 16 && $0.refreshRate >= 90 }
                 .map { (width: $0.width, height: $0.height) }

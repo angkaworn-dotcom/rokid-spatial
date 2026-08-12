@@ -149,16 +149,31 @@ struct SettingsView: View {
                 if controller.source == .glassesOnly {
                     // Options come from the panel itself, learned on the
                     // first run; applies to all three screens.
-                    labelled("Desktop size (all screens)") {
-                        Picker("", selection: $controller.desktopSize) {
-                            ForEach(controller.desktopSizes, id: \.self) { size in
-                                Text(size).tag(size)
+                    if controller.refreshRate == 120 {
+                        labelled("Desktop size (all screens)") {
+                            Picker("", selection: $controller.desktopSize) {
+                                ForEach(controller.desktopSizes, id: \.self) { size in
+                                    Text(size).tag(size)
+                                }
                             }
+                            .labelsHidden()
+                            .disabled(controller.isRunning)
                         }
-                        .labelsHidden()
-                        .disabled(controller.isRunning)
                     }
                 }
+
+                // 60 Hz runs the panel's 2D mode (1920×1080); no scaled sizes.
+                labelled("Panel refresh") {
+                    Picker("", selection: $controller.refreshRate) {
+                        Text("120 Hz").tag(120)
+                        Text("60 Hz").tag(60)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .disabled(controller.isRunning)
+                }
+
+                Toggle("Anti-moiré resample", isOn: $controller.antiMoire)
 
                 Button("Fit for sharpness") { controller.fitForSharpness() }
                     .disabled(!controller.isRunning)
