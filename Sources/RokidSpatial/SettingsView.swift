@@ -209,8 +209,13 @@ struct SettingsView: View {
                 slider("IPD", value: $controller.ipd,
                        range: 0...0.200, unit: "m", format: "%.3f")
 
+                // Smoothing time constant; the added latency is roughly the
+                // value itself. The top of the range is deliberately past
+                // "sensible" (user request, after maxing the old 0.060):
+                // heavy smoothing reads as a softer, slower screen — where
+                // the tremor-vs-lag trade sits is for the eyes to decide.
                 slider("Stabilizer", value: $controller.steady,
-                       range: 0...0.060, unit: "s", format: "%.3f")
+                       range: 0...0.200, unit: "s", format: "%.3f")
                 slider("Lock while turning", value: $controller.motionLock,
                        range: 0...1, unit: "", format: "%.2f")
                 slider("Prediction", value: $controller.lookAhead,
