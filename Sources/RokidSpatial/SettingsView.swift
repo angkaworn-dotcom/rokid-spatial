@@ -175,6 +175,8 @@ struct SettingsView: View {
                 }
                 Toggle("Anti-moiré resample", isOn: $controller.antiMoire)
 
+                Toggle("Performance HUD", isOn: $controller.metalHUD)
+
                 Button("Fit for sharpness") { controller.fitForSharpness() }
                     .disabled(!controller.isRunning)
 

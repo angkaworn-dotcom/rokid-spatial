@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var runObserver: AnyCancellable?
+    private var settingsRescueTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setUpStatusItem()
@@ -24,10 +25,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // back onto the glasses' sliver (also seen live). Retry on a
         // schedule; each attempt acts only if the window is misplaced.
         runObserver = controller.$isRunning.sink { [weak self] running in
-            guard running, let self, self.controller.source == .glassesOnly else { return }
-            for delay in [1.0, 5.0, 10.0, 20.0] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    self.relocateSettingsIfNeeded()
+            guard let self else { return }
+            self.settingsRescueTimer?.invalidate()
+            self.settingsRescueTimer = nil
+            guard running else { return }
+            if self.controller.source == .glassesOnly {
+                for delay in [1.0, 5.0, 10.0, 20.0] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        self.relocateSettingsIfNeeded()
+                    }
+                }
+            }
+            // The fixed retries end at 20 s, and macOS has re-applied
+            // remembered arrangements later than that (seen live: the
+            // settings window rode the built-in into its parked spot and
+            // "wouldn't open"). A standing rescue closes the gap — but only
+            // off desktops the user cannot see, so a window deliberately
+            // parked on a side screen stays where they put it.
+            self.settingsRescueTimer = Timer.scheduledTimer(withTimeInterval: 5,
+                                                            repeats: true) { _ in
+                Task { @MainActor [weak self] in
+                    self?.rescueSettingsFromHiddenDesktop()
                 }
             }
         }
@@ -50,6 +68,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller.sbsMode = .sbs60
         } else if CommandLine.arguments.contains("--sbs=120") {
             controller.sbsMode = .hz120
+        }
+        // `--hud` overlays the Metal Performance HUD on the glasses layer —
+        // the Direct-vs-Composited readout the direct-scanout work steers by.
+        if CommandLine.arguments.contains("--hud") {
+            controller.metalHUD = true
         }
         if CommandLine.arguments.contains("--autostart") {
             controller.start()
@@ -164,6 +187,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let window = settingsWindow,
               let target = NSScreen.screens.first(where: { $0.frame.origin == .zero }),
               window.screen !== target else { return }
+        var frame = window.frame
+        frame.origin = CGPoint(x: target.frame.midX - frame.width / 2,
+                               y: target.frame.midY - frame.height / 2)
+        window.setFrame(frame, display: true)
+        window.orderFront(nil)
+    }
+
+    /// Pull the settings window back to the wall's main desktop when it is
+    /// sitting on a desktop the user cannot see. Runs on a standing timer for
+    /// the whole session; acts only in that one unreachable case.
+    private func rescueSettingsFromHiddenDesktop() {
+        let hidden = controller.hiddenDisplayIDs()
+        guard !hidden.isEmpty,
+              let window = settingsWindow, window.isVisible,
+              let screen = window.screen,
+              let number = screen.deviceDescription[
+                  NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+              hidden.contains(CGDirectDisplayID(truncating: number)),
+              let target = NSScreen.screens.first(where: { $0.frame.origin == .zero })
+        else { return }
         var frame = window.frame
         frame.origin = CGPoint(x: target.frame.midX - frame.width / 2,
                                y: target.frame.midY - frame.height / 2)

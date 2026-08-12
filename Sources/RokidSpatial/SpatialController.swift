@@ -160,7 +160,7 @@ final class SpatialController: ObservableObject {
             case .sbs90:
                 return "Stereo depth at 90 Hz (the Station 2 mode) — smoothest motion with depth. Windows opened before Start stay on the hidden MacBook desktop until Stop."
             case .hz120:
-                return "1920×1200 @ 120 Hz, no stereo — maximum motion clarity. Windows opened before Start stay on the hidden MacBook desktop until Stop."
+                return "1920×1080 @ 120 Hz, no stereo — maximum motion clarity. Windows opened before Start stay on the hidden MacBook desktop until Stop."
             }
         }
     }
@@ -183,6 +183,16 @@ final class SpatialController: ObservableObject {
     /// keyboard, eyes never leave the glasses. Detection is a sharp spike in
     /// the gyro's derivative (ported from XRLinuxDriver's multitap).
     @Published var doubleTapRecenter = false { didSet { tapEnabled.set(doubleTapRecenter); persist(doubleTapRecenter, "doubleTapRecenter") } }
+
+    /// Show Apple's Metal Performance HUD on the overlay layer. Its
+    /// presentation line is the instrument for the direct-scanout work:
+    /// green `Direct` when the layer goes straight to the display, orange
+    /// `Composited` when WindowServer is in the path. A settings toggle
+    /// (persisted), also forced on by `--hud` or MTL_HUD_ENABLED; flips
+    /// live — the HUD is a property of the existing layer.
+    @Published var metalHUD = false {
+        didSet { persist(metalHUD, "metalHUD"); applyMetalHUD() }
+    }
 
     /// Panel pixels per captured pixel across the virtual screen. 1.0 means
     /// the desktop maps one-to-one; below that, detail is being thrown away
@@ -377,6 +387,9 @@ final class SpatialController: ObservableObject {
         if d.object(forKey: "doubleTapRecenter") != nil { doubleTapRecenter = d.bool(forKey: "doubleTapRecenter") }
         if d.object(forKey: "curved") != nil { curved = d.bool(forKey: "curved") }
         if d.object(forKey: "antiMoire") != nil { antiMoire = d.bool(forKey: "antiMoire") }
+        if d.object(forKey: "metalHUD") != nil { metalHUD = d.bool(forKey: "metalHUD") }
+        // The env override never persists: observers don't fire in init.
+        if ProcessInfo.processInfo.environment["MTL_HUD_ENABLED"] == "1" { metalHUD = true }
         if let v = SBSMode(rawValue: d.string(forKey: "sbsMode") ?? "") {
             sbsMode = v
         } else if d.bool(forKey: "sbs90") {
@@ -998,6 +1011,22 @@ final class SpatialController: ObservableObject {
 
     private let mousePoller = MousePoller()
 
+    /// Desktops the user cannot currently see: the parked dark displays of a
+    /// standalone session, or — in the extended sources — the glasses'
+    /// desktop, which sits under the opaque overlay. The settings-window
+    /// rescue polls this; a window on any of these reads as "won't open".
+    func hiddenDisplayIDs() -> [CGDirectDisplayID] {
+        guard isRunning else { return [] }
+        if source != .glassesOnly {
+            return [displays.glassesDisplayID].compactMap { $0 }
+        }
+        guard standaloneActive else { return [] }
+        let mainID = stereoActive ? virtualDisplay.displayID
+                                  : displays.glassesDisplayID
+        guard let mainID else { return [] }
+        return standaloneParked(excluding: mainID)
+    }
+
     /// Displays a standalone session parks below the wall: the glasses'
     /// sliver desktop (stereo variants only — at 120 Hz the glasses ARE the
     /// wall's main) and the built-in — except in SBS-60, where the built-in
@@ -1276,6 +1305,14 @@ final class SpatialController: ObservableObject {
         func get() -> CFRunLoop? { lock.lock(); defer { lock.unlock() }; return loop }
     }
 
+    /// Push the HUD toggle onto the live overlay layer — takes effect
+    /// immediately, no session restart.
+    private func applyMetalHUD() {
+        guard let layer = metalView?.layer as? CAMetalLayer else { return }
+        layer.developerHUDProperties = metalHUD ? ["mode": "default"] : nil
+        if metalHUD { Self.appendLog("Metal HUD enabled on the overlay layer") }
+    }
+
     private func createOverlayWindow(renderer: Renderer) {
         // In a mirror set NSScreen may list the set under either display's ID;
         // if the lookup by the glasses' ID comes up empty, the single visible
@@ -1304,6 +1341,10 @@ final class SpatialController: ObservableObject {
         )
         window.contentView = view
         window.setFrame(bounds, display: true)
+        // Apply only after the view joins the window: before that MTKView's
+        // backing layer may not exist yet and the HUD silently never
+        // appears (seen live).
+        applyMetalHUD()
         // Two classes of thing try to draw on top of the overlay, and they
         // need different weapons. The cursor is a hardware plane composited
         // above every window — no level beats it; it is dealt with by hiding

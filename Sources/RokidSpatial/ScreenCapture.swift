@@ -45,9 +45,25 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     func start(displayID: CGDirectDisplayID, frameRate: Int,
                excludingWindowNumber: Int? = nil,
                showsCursor: Bool = true) async throws {
-        let content = try await SCShareableContent.excludingDesktopWindows(
+        var content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true
         )
+
+        // The narrow exclusion needs the overlay window in the shareable
+        // list, and a window created moments ago may not be enumerated yet.
+        // Falling back silently used to exclude the whole app instead — which
+        // also erased the settings window from the capture, the one place a
+        // glasses-only user can see it ("Settings won't open", seen live).
+        // Give enumeration a moment to catch up before accepting that.
+        if let number = excludingWindowNumber {
+            for _ in 0..<3 where !content.windows.contains(
+                where: { $0.windowID == CGWindowID(number) }) {
+                try await Task.sleep(nanoseconds: 700_000_000)
+                content = try await SCShareableContent.excludingDesktopWindows(
+                    false, onScreenWindowsOnly: true
+                )
+            }
+        }
 
         guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
             throw CaptureError.displayNotShareable
@@ -62,6 +78,10 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
            let overlay = content.windows.first(where: { $0.windowID == CGWindowID(number) }) {
             filter = SCContentFilter(display: display, excludingWindows: [overlay])
         } else {
+            if excludingWindowNumber != nil {
+                AppLog.append("capture: overlay window never enumerated — "
+                    + "excluding the whole app (settings will be invisible)")
+            }
             filter = SCContentFilter(
                 display: display,
                 excludingApplications: ourApp.map { [$0] } ?? [],

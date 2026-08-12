@@ -194,3 +194,49 @@ Traps found live during the build, all now defended:
    could see nothing clickable and had to ⌃⌥Esc. The window now
    relocates to the origin display when an SBS session starts and on
    every menu-bar reopen.
+
+## The direct-scanout instrument, and what it read (2026-08-12, third session)
+
+The 60-flip stick finally has a measuring stick: the Metal Performance
+HUD, enabled programmatically on the overlay's CAMetalLayer
+(`developerHUDProperties` — must be set *after* the view joins the
+window, or MTKView's backing layer does not exist yet and the cast
+fails silently; cost half an hour). Now a persisted settings toggle
+("Performance HUD"), flips live.
+
+What it read, in mode 3 (1920×1080 @ 120, per user preference — the
+panel offers a real 1:1 1920×1080@120):
+
+- Stuck phase: **`Composited`** (orange), FPS 63, frame interval
+  15.8 ms — on a 120 Hz panel. GPU time 0.47 ms: the app is nowhere
+  near the bottleneck. `sample` agrees: ~78 % of render-thread time
+  blocked in `nextDrawable` — WindowServer holding our drawables.
+- **A glasses USB re-plug clears the stick** (first time tested):
+  ~110 fps for ~80 s immediately after, then sagged back to ~63.
+- But it is NOT a hard stick this session: with the machine idle it
+  climbed back on its own — 62 → 100 → sustained 110-149 — with zero
+  app-side events in the log. WindowServer oscillates between a fast
+  path (direct-ish, ~110+) and the composited 60-ish path on its own
+  schedule.
+- Circumstantial: while fast, screencapture of the display did NOT
+  show the HUD box (it did while composited) — consistent with the
+  HUD riding a direct-scanout present that bypasses the capture
+  composite. Not yet confirmed by an eye-read of Direct.
+
+Traps fixed along the way, both "Settings won't open" reports in the
+standalone modes:
+
+1. The fixed 1/5/10/20 s relocation retries end before macOS's last
+   remembered-arrangement re-apply; the window rode the built-in into
+   its parked spot. Now a standing 5 s rescue for the whole session,
+   acting only when the window sits on a desktop the user cannot see.
+2. `ScreenCapture` silently fell back from excluding-the-overlay to
+   excluding-the-whole-app when SCShareableContent had not yet
+   enumerated the just-created overlay window — erasing the settings
+   window from the glasses' own capture. Now retries enumeration
+   (3 × 0.7 s) and logs if the wide fallback is ever taken.
+
+Open: what flips WindowServer between the fast and slow phases, and
+how to pin it fast (eligibility iteration: colorspace, Game Mode,
+window level; or CGDisplayCapture exclusive mode). The HUD toggle is
+the tool for whoever picks this up.

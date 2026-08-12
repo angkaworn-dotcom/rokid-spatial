@@ -323,9 +323,11 @@ final class DisplayManager {
         // mode these panel modes offer runs at that mode's one rate
         // (measured), so only the size needs picking: the SBS slivers are
         // full-width points at 2.0 backing (3840×1200 / 3840×1080 px);
-        // mode 3 is a real 1:1 1920×1200 desktop.
+        // mode 3 runs a real 1:1 desktop — 1920×1080 by user preference
+        // (16:9, same shape as the 60 Hz daily driver) on the panel's
+        // 1920×1200 raster.
         setDesktopResolution(glassesID, width: 1920,
-                             height: mode == .highRefreshRate ? 1200
+                             height: mode == .highRefreshRate ? 1080
                                    : mode == .highRefreshRateSBS ? 600 : 540)
         if let current = CGDisplayCopyDisplayMode(glassesID) {
             glassesDesktopSize = (current.width, current.height)
