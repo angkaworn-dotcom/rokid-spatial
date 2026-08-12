@@ -240,3 +240,12 @@ Open: what flips WindowServer between the fast and slow phases, and
 how to pin it fast (eligibility iteration: colorspace, Game Mode,
 window level; or CGDisplayCapture exclusive mode). The HUD toggle is
 the tool for whoever picks this up.
+
+Correction (next morning): the "HUD absent from screencapture while
+fast" hint above is void — those sessions had no HUD at all. The
+developerHUDProperties API is a silent no-op on this machine however
+it is applied; only the MTL_HUD_ENABLED environment produces a HUD,
+and it must be set before Metal loads. The app now setenv's it for
+itself at process start from the persisted toggle (so the toggle takes
+effect at the next session start). Whether the fast phase is Direct
+remains unread.
