@@ -579,11 +579,11 @@ final class DisplayManager {
             let expectedX = side.isRight ? main.maxX : main.minX - bounds.width
             if bounds.origin.x != expectedX || bounds.origin.y != main.minY { return true }
         }
-        var y = main.maxY
+        var y = main.minY
         for id in parked {
             let bounds = CGDisplayBounds(id)
+            y -= bounds.height
             if bounds.origin.x != 0 || bounds.origin.y != y { return true }
-            y += bounds.height
         }
         return false
     }
@@ -601,11 +601,17 @@ final class DisplayManager {
                                                side.isRight ? mainWidth : -width, 0)
                 guard err == .success else { return err }
             }
-            var y = Int32(CGDisplayPixelsHigh(mainID))
+            // Parked displays stack ABOVE the wall, not below: a
+            // bottom-anchored Dock refuses to live on a display whose
+            // bottom edge adjoins another display, so parking below sent
+            // the Dock to the hidden sliver every time it respawned (seen
+            // live, three bounces in a row) — and system dialogs followed
+            // it there.
+            var y: Int32 = 0
             for id in parked {
+                y -= Int32(CGDisplayPixelsHigh(id))
                 err = CGConfigureDisplayOrigin(config, id, 0, y)
                 guard err == .success else { return err }
-                y += Int32(CGDisplayPixelsHigh(id))
             }
             return .success
         }
