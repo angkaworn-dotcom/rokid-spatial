@@ -1,4 +1,5 @@
 import AppKit
+import RokidKit
 
 // Display-restore helper mode, spawned by the app as it quits.
 //
@@ -14,6 +15,39 @@ if CommandLine.arguments.contains("--restore-displays") {
     let displays = DisplayManager()
     displays.log = { AppLog.append("helper: " + $0) }
     displays.restore()
+    exit(0)
+}
+
+// Debug probe: switch the panel to a numbered mode (see DisplayMode), wait
+// for enumeration, print every desktop mode macOS then offers, and exit.
+// `--panel-mode=4` was added to scope the Station-2-style 90 Hz SBS route.
+if let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--panel-mode=") }),
+   let raw = UInt16(arg.dropFirst("--panel-mode=".count)),
+   let mode = DisplayMode(rawValue: raw) {
+    do {
+        let previous = try RokidDisplay.currentMode()
+        print("current mode: \(previous), switching to \(mode)")
+        _ = try RokidDisplay.setMode(mode)
+        Thread.sleep(forTimeInterval: 5)
+        var count: UInt32 = 0
+        CGGetOnlineDisplayList(0, nil, &count)
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetOnlineDisplayList(count, &ids, &count)
+        for id in ids where CGDisplayVendorNumber(id) == 12372 {
+            let current = CGDisplayCopyDisplayMode(id)
+            print("glasses display \(id): current \(current?.width ?? 0)×\(current?.height ?? 0) " +
+                  "@ \(current?.refreshRate ?? 0) px \(current?.pixelWidth ?? 0)×\(current?.pixelHeight ?? 0)")
+            for m in (CGDisplayCopyAllDisplayModes(id, nil) as? [CGDisplayMode]) ?? [] {
+                print(String(format: "  %d×%d @ %.0f Hz  px %d×%d%@",
+                             m.width, m.height, m.refreshRate, m.pixelWidth, m.pixelHeight,
+                             m.isUsableForDesktopGUI() ? "" : "  (not desktop-usable)"))
+            }
+        }
+        print("restoring mode \(previous)")
+        _ = try RokidDisplay.setMode(previous)
+    } catch {
+        print("panel-mode probe failed: \(error)")
+    }
     exit(0)
 }
 

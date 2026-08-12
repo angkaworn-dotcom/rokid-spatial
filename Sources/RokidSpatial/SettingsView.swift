@@ -79,6 +79,8 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                // A multi-screen wall is anchored by definition.
+                .disabled(controller.source == .glassesOnly && controller.sideScreens != .none)
             }
 
             slider("Distance", value: $controller.distance,
@@ -161,6 +163,10 @@ struct SettingsView: View {
                     slider("Settle", value: $controller.settleSpeed,
                            range: 0...5, unit: "", format: "%.2f")
                 }
+
+                // Eye separation for the stereo (SBS) render path.
+                slider("IPD", value: $controller.ipd,
+                       range: 0.054...0.074, unit: "m", format: "%.3f")
 
                 slider("Stabilizer", value: $controller.steady,
                        range: 0...0.060, unit: "s", format: "%.3f")

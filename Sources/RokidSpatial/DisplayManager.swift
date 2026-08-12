@@ -516,6 +516,42 @@ final class DisplayManager {
     /// Push it back once before giving up — often it is a transient settling
     /// step rather than a permanent decision.
     @discardableResult
+    /// The wall layout: main display at the origin (menu bar and centre of
+    /// the wall), right side flush against its right edge, left side flush
+    /// against its left. macOS's remembered arrangements scatter these on
+    /// re-apply; the watchdog checks cheaply every second and fixes in one
+    /// batched reconfiguration.
+    func wallLayoutIsBroken(sides: [(id: CGDirectDisplayID, isRight: Bool)]) -> Bool {
+        guard let mainID = glassesDisplayID else { return false }
+        let main = CGDisplayBounds(mainID)
+        if main.origin != .zero { return true }
+        for side in sides {
+            let bounds = CGDisplayBounds(side.id)
+            let expectedX = side.isRight ? main.maxX : main.minX - bounds.width
+            if bounds.origin.x != expectedX || bounds.origin.y != main.minY { return true }
+        }
+        return false
+    }
+
+    func fixWallLayout(sides: [(id: CGDirectDisplayID, isRight: Bool)]) {
+        guard let mainID = glassesDisplayID else { return }
+        let mainWidth = Int32(CGDisplayPixelsWide(mainID))
+        try? configure { config in
+            var err = CGConfigureDisplayOrigin(config, mainID, 0, 0)
+            guard err == .success else { return err }
+            for side in sides {
+                let width = Int32(CGDisplayPixelsWide(side.id))
+                err = CGConfigureDisplayOrigin(config, side.id,
+                                               side.isRight ? mainWidth : -width, 0)
+                guard err == .success else { return err }
+            }
+            return .success
+        }
+        Thread.sleep(forTimeInterval: 0.5)
+        // Every reconfiguration invites a remembered-mode re-apply too.
+        reapplyDesktopSize()
+    }
+
     /// Glasses-only wants the built-in *inside* the glasses' mirror set —
     /// dark, with nothing to lose windows on. macOS re-applies whatever
     /// arrangement it last remembered on every reconfiguration, and after

@@ -33,7 +33,15 @@ final class SpatialController: ObservableObject {
 
     @Published var source: CaptureSource = .mirror { didSet { persist(source.rawValue, "source") } }
 
-    @Published var mode: AnchorMode = .follow { didSet { screen.mode = mode } }
+    @Published var mode: AnchorMode = .follow {
+        didSet {
+            if mode == .follow, source == .glassesOnly, sideScreens != .none {
+                mode = .anchored
+                return
+            }
+            screen.mode = mode
+        }
+    }
     @Published var distance: Float = 2.5 { didSet { screen.distance = distance; persist(distance, "distance") } }
     @Published var diagonal: Float = 1.5 { didSet { screen.diagonal = diagonal; persist(diagonal, "diagonal") } }
     @Published var height: Float = 0 { didSet { screen.verticalOffset = height; persist(height, "height") } }
@@ -41,7 +49,14 @@ final class SpatialController: ObservableObject {
     /// Glasses-only: extra virtual desktops rendered as screens hanging next
     /// to the main one, triple-monitor style. Side screens are always created
     /// at the main desktop's resolution, so the three screens match exactly.
-    @Published var sideScreens: SideScreens = .none { didSet { persist(sideScreens.rawValue, "sideScreens") } }
+    /// With more than one screen the wall only makes sense anchored in
+    /// space — follow mode would drag all three around with your head.
+    @Published var sideScreens: SideScreens = .none {
+        didSet {
+            persist(sideScreens.rawValue, "sideScreens")
+            if sideScreens != .none, mode == .follow { mode = .anchored }
+        }
+    }
 
     enum SideScreens: String, CaseIterable, Identifiable {
         case none
@@ -226,6 +241,14 @@ final class SpatialController: ObservableObject {
 
     /// Built-in panel brightness before glasses-only mode dimmed it to zero.
     private var savedBrightness: Float?
+
+    /// Keeps App Nap and timer coalescing away from the render pipeline for
+    /// the whole session — frame pacing is the product.
+    private var activityToken: NSObjectProtocol?
+
+    /// True while a wall-layout fix is running; the check is per-second and
+    /// the fix takes longer than a second.
+    private var layoutFixInFlight = false
 
     /// Set when the Mac goes to sleep mid-session: the session is stopped
     /// cleanly before sleep and started again once the glasses re-enumerate
@@ -533,6 +556,9 @@ final class SpatialController: ObservableObject {
         // Watching during that window produces false alarms and tears down a
         // session that was about to be fine.
         watchdogArmsAt = Date().addingTimeInterval(6)
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .latencyCritical],
+            reason: "Realtime XR rendering")
         isRunning = true
         isStarting = false
         let size = displays.glassesPixelSize
@@ -586,9 +612,10 @@ final class SpatialController: ObservableObject {
                     Self.appendLog("side \(index) capture stopped: \(error.localizedDescription)")
                 }
                 do {
-                    // Mostly-static content; half rate is plenty and halves
-                    // the capture cost.
-                    try await sideCapture.start(displayID: sideID, frameRate: 60,
+                    // Mostly-static content; half rate is plenty and keeps
+                    // the window server's capture work away from the main
+                    // screen's 60 fps floor.
+                    try await sideCapture.start(displayID: sideID, frameRate: 30,
                                                 showsCursor: false)
                     renderer.sideActive[index] = true
                 } catch {
@@ -862,6 +889,8 @@ final class SpatialController: ObservableObject {
         cursorTimer?.invalidate()
         cursorTimer = nil
         mousePoller.stop()
+        if let activityToken { ProcessInfo.processInfo.endActivity(activityToken) }
+        activityToken = nil
         rateTimer?.invalidate()
         rateTimer = nil
         if let loop = imuLoop.get(), let imu {
@@ -1097,6 +1126,31 @@ final class SpatialController: ObservableObject {
                 // before judging health again.
                 unhealthyTicks = 0
                 return
+            }
+            // The main screen stays at the centre of the wall. When macOS
+            // re-applies a remembered arrangement that scatters the
+            // displays, put them back and re-derive the cursor mapping,
+            // whose display bounds were captured at attach time.
+            if source == .glassesOnly, !layoutFixInFlight {
+                let sides = sideScreens.indices.compactMap { index -> (id: CGDirectDisplayID, isRight: Bool)? in
+                    guard let id = sideDisplays[index].displayID else { return nil }
+                    return (id, index == 0)
+                }
+                if displays.wallLayoutIsBroken(sides: sides) {
+                    layoutFixInFlight = true
+                    Self.appendLog("layout: the wall drifted — recentring the main screen")
+                    Task {
+                        await Task.detached { [displays] in
+                            displays.fixWallLayout(sides: sides)
+                        }.value
+                        if let renderer = self.renderer {
+                            self.attachRenderedCursor(to: renderer, displayID: glassesID)
+                        }
+                        self.layoutFixInFlight = false
+                    }
+                    unhealthyTicks = 0
+                    return
+                }
             }
         } else {
             problems.append("the glasses display disappeared")
