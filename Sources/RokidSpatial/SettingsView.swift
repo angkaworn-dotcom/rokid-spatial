@@ -146,39 +146,7 @@ struct SettingsView: View {
                     Toggle("Work in the glasses", isOn: $controller.virtualIsMain)
                         .disabled(controller.isRunning)
                 }
-                if controller.source == .glassesOnly {
-                    // Options come from the panel itself, learned on the
-                    // first run; applies to all three screens.
-                    if controller.refreshRate == 120 {
-                        labelled("Desktop size (all screens)") {
-                            Picker("", selection: $controller.desktopSize) {
-                                ForEach(controller.desktopSizes, id: \.self) { size in
-                                    Text(size).tag(size)
-                                }
-                            }
-                            .labelsHidden()
-                            .disabled(controller.isRunning)
-                        }
-                    }
-                }
-
-                // 60 Hz runs the panel's 2D mode (1920×1080); no scaled sizes.
-                labelled("Panel refresh") {
-                    Picker("", selection: $controller.refreshRate) {
-                        Text("120 Hz").tag(120)
-                        Text("60 Hz").tag(60)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .disabled(controller.isRunning)
-                }
-
                 Toggle("Anti-moiré resample", isOn: $controller.antiMoire)
-
-                if controller.source == .glassesOnly {
-                    Toggle("No mirror (120 Hz experiment)", isOn: $controller.standalone120)
-                        .disabled(controller.isRunning)
-                }
 
                 Button("Fit for sharpness") { controller.fitForSharpness() }
                     .disabled(!controller.isRunning)

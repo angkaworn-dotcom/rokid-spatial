@@ -226,14 +226,26 @@ final class DisplayManager {
         if mirrored {
             // macOS usually re-mirrors on its own within a few seconds of the
             // mode change — its remembered arrangement finally working *for*
-            // us. Only step in if it hasn't.
-            if CGDisplayIsInMirrorSet(glassesID) == 0, let builtin = deskDisplayID {
+            // us. Step in if it hasn't, and also if it mirrored the wrong way
+            // round: with the *glasses* as the copy, the panel runs at the
+            // built-in's raster (seen live as an unwanted 1680×1050 desktop)
+            // and ScreenCaptureKit loses the display it was going to capture.
+            let backwards = CGDisplayMirrorsDisplay(glassesID) != kCGNullDirectDisplay
+            if backwards {
+                log?("glasses-only: mirror is backwards (glasses copying the built-in) — re-mastering")
+                _ = reassertUnmirrored()
+                Thread.sleep(forTimeInterval: 1.0)
+            }
+            if CGDisplayIsInMirrorSet(glassesID) == 0 || backwards, let builtin = deskDisplayID {
                 log?("glasses-only: mirroring built-in onto the glasses")
                 try configure { config in
                     CGConfigureDisplayMirrorOfDisplay(config, builtin, glassesID)
                 }
                 Thread.sleep(forTimeInterval: 1.0)
             }
+            // Assert the glasses-native raster. The remembered mode macOS
+            // re-applies can be anything a past tangle left behind.
+            setDesktopResolution(glassesID, width: 1920, height: mode == .highRefreshRate ? 1200 : 1080)
         } else {
             // Standalone experiment: the 60 Hz built-in member of the mirror
             // set is exactly what macOS "harmonizes" the flip rate down to
@@ -504,6 +516,23 @@ final class DisplayManager {
     /// Push it back once before giving up — often it is a transient settling
     /// step rather than a permanent decision.
     @discardableResult
+    /// Glasses-only wants the built-in *inside* the glasses' mirror set —
+    /// dark, with nothing to lose windows on. macOS re-applies whatever
+    /// arrangement it last remembered on every reconfiguration, and after
+    /// the standalone experiments that memory is "unmirrored", so the
+    /// built-in kept popping back out as a live 1680×1050 desktop (the
+    /// "three screens are broken" report). Returns true if it had to act.
+    func reassertGlassesOnlyMirror() -> Bool {
+        guard let glassesID = glassesDisplayID,
+              let builtin = deskDisplayID, builtin != glassesID,
+              CGDisplayIsInMirrorSet(builtin) == 0 else { return false }
+        log?("glasses-only: built-in fell out of the mirror set — re-mirroring")
+        try? configure { config in
+            CGConfigureDisplayMirrorOfDisplay(config, builtin, glassesID)
+        }
+        return true
+    }
+
     func reassertUnmirrored() -> Bool {
         let all = onlineDisplays()
         guard all.contains(where: { CGDisplayIsInMirrorSet($0) != 0 }) else { return true }
