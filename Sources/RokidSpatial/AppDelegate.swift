@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 import Carbon.HIToolbox
 
 @MainActor
@@ -8,11 +9,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkeys = Hotkeys()
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
+    private var runObserver: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setUpStatusItem()
         setUpHotkeys()
         showSettings()
+
+        // SBS runs the working desktop as a brand-new display, so a settings
+        // window remembered on the built-in — now parked below and dimmed to
+        // zero — is invisible and unreachable; the user's only way out was
+        // the emergency hotkey (seen live, first SBS session). Re-show the
+        // window once the session is up: showSettings relocates it.
+        runObserver = controller.$isRunning.sink { [weak self] running in
+            guard running, let self, self.controller.sbsActive else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.showSettings()
+            }
+        }
 
         // Useful while iterating: skips the manual Start click so a rebuild
         // can be launched and inspected in one step. `--source=` picks the
@@ -124,6 +138,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.isReleasedWhenClosed = false
             window.center()
             settingsWindow = window
+        }
+        // During an SBS session, make sure the window is on the working
+        // desktop (the display at the origin — the one the eye sees). Its
+        // remembered position may be on the dark parked built-in or under
+        // the glasses overlay.
+        if controller.sbsActive, controller.isRunning, let window = settingsWindow,
+           let target = NSScreen.screens.first(where: { $0.frame.origin == .zero }),
+           window.screen !== target {
+            var frame = window.frame
+            frame.origin = CGPoint(x: target.frame.midX - frame.width / 2,
+                                   y: target.frame.midY - frame.height / 2)
+            window.setFrame(frame, display: true)
         }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
