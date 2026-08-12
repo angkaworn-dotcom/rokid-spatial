@@ -131,7 +131,10 @@ User-sourced findings (2026-08-12):
 - Station 2 is not a fix: Rokid specifies Max + Station 2 runs the whole
   system at 90 Hz (Max reaches 120 only on other hosts).
 - Firmware cannot be updated without a Station 2 (Rokid AR app failed to
-  see the glasses from iPad and Samsung phone alike); current fw 512.
+  see the glasses from iPad and Samsung phone alike); current fw **0.40**
+  (the "512" once recorded here was bcdDevice, the static USB device
+  release number — not a firmware version. The real one is an ASCII
+  string behind vendor query selector 0x00; see PROTOCOL.md).
 
 Decision: **Mac version stays 60 Hz** (1:1, clean image, daily driver).
 120 Hz effort moves to the Windows port, where custom timing tools (CRU)
