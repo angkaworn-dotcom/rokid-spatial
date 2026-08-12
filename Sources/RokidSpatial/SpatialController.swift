@@ -723,6 +723,9 @@ final class SpatialController: ObservableObject {
                         // variants' content rate down.
                         _ = displays.mirrorBuiltinOntoWorking(captureID)
                     }
+                    // The shuffle can leave the Dock on a hidden display
+                    // (seen live: the glasses' sliver — "Dock หาไม่เจอ").
+                    displays.rehomeDockIfHidden(hiddenDisplays: parked)
                 }.value
             } else {
                 // Side screens, for those whose displays came up: right sits

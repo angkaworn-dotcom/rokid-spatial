@@ -684,6 +684,37 @@ final class DisplayManager {
         return onlineDisplays().allSatisfy { CGDisplayIsInMirrorSet($0) == 0 }
     }
 
+    /// The Dock parks its backing window on one display; after the
+    /// standalone shuffle that can be a hidden one (seen live: the glasses'
+    /// sliver desktop), which takes the Dock and its menus out of reach.
+    /// Detect it and bounce the Dock — it respawns on the current main
+    /// display, which is the wall's centre screen.
+    func rehomeDockIfHidden(hiddenDisplays: [CGDirectDisplayID]) {
+        guard !hiddenDisplays.isEmpty,
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly],
+                                                    kCGNullWindowID) as? [[String: Any]]
+        else { return }
+        let regions = hiddenDisplays.map { CGDisplayBounds($0) }
+        let dockHidden = list.contains { window in
+            guard let owner = window[kCGWindowOwnerName as String] as? String,
+                  owner == "Dock",
+                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let x = bounds["X"] as? Double, let y = bounds["Y"] as? Double,
+                  let width = bounds["Width"] as? Double,
+                  let height = bounds["Height"] as? Double,
+                  width > 400, height > 100
+            else { return false }
+            let centre = CGPoint(x: x + width / 2, y: y + height / 2)
+            return regions.contains { $0.contains(centre) }
+        }
+        guard dockHidden else { return }
+        log?("standalone: the Dock parked on a hidden display — bouncing it home")
+        let kill = Process()
+        kill.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        kill.arguments = ["Dock"]
+        try? kill.run()
+    }
+
     private func configure(_ body: (CGDisplayConfigRef?) -> CGError) throws {
         var config: CGDisplayConfigRef?
         var err = CGBeginDisplayConfiguration(&config)
