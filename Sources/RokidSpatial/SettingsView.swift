@@ -50,7 +50,7 @@ struct SettingsView: View {
             }
 
             if !controller.strandedApps.isEmpty {
-                Text("Hidden behind the overlay: \(controller.strandedApps.joined(separator: ", ")). Press Stop, drag them onto the MacBook screen, then Start.")
+                Text("Hidden on a covered screen: \(controller.strandedApps.joined(separator: ", ")). Press Stop to get them back, or drag them onto a visible desktop.")
                     .font(.caption2)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -106,7 +106,7 @@ struct SettingsView: View {
                     slider("Gap", value: $controller.screenGap,
                            range: 0...10, unit: "°", format: "%.0f")
                 }
-                labelled("SBS stereo") {
+                labelled("Panel mode") {
                     Picker("", selection: $controller.sbsMode) {
                         ForEach(SpatialController.SBSMode.allCases) { mode in
                             Text(mode.label).tag(mode)
@@ -117,7 +117,7 @@ struct SettingsView: View {
                     .disabled(controller.isRunning)
                 }
                 if controller.sbsMode != .off {
-                    Text("Per-eye stereo on a separate working desktop; depth via the IPD slider under More. 60 Hz is the cleaner image, 90 Hz the smoother motion (very faint lines on white). The MacBook screen goes dark and unmirrored.")
+                    Text(controller.sbsMode.detail)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

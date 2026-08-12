@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the emergency hotkey (seen live, first SBS session). Re-show the
         // window once the session is up: showSettings relocates it.
         runObserver = controller.$isRunning.sink { [weak self] running in
-            guard running, let self, self.controller.sbsActive else { return }
+            guard running, let self, self.controller.standaloneActive else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 self.showSettings()
             }
@@ -36,13 +36,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                rawValue: String(flag.dropFirst("--source=".count))) {
             controller.source = source
         }
-        // `--sbs` (90 Hz) or `--sbs=60` opts the session into SBS, so a
-        // rebuild can be launched straight into the mode under test:
-        // `--source=glassesOnly --sbs=60 --autostart`.
+        // `--sbs` (90 Hz), `--sbs=60`, or `--sbs=120` (mode 3, not actually
+        // SBS — the flag name stays for muscle memory) opts the session into
+        // a standalone variant, so a rebuild can be launched straight into
+        // the mode under test: `--source=glassesOnly --sbs=60 --autostart`.
         if CommandLine.arguments.contains("--sbs") {
             controller.sbsMode = .sbs90
         } else if CommandLine.arguments.contains("--sbs=60") {
             controller.sbsMode = .sbs60
+        } else if CommandLine.arguments.contains("--sbs=120") {
+            controller.sbsMode = .hz120
         }
         if CommandLine.arguments.contains("--autostart") {
             controller.start()
@@ -146,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // desktop (the display at the origin — the one the eye sees). Its
         // remembered position may be on the dark parked built-in or under
         // the glasses overlay.
-        if controller.sbsActive, controller.isRunning, let window = settingsWindow,
+        if controller.standaloneActive, controller.isRunning, let window = settingsWindow,
            let target = NSScreen.screens.first(where: { $0.frame.origin == .zero }),
            window.screen !== target {
             var frame = window.frame
