@@ -20,6 +20,7 @@ echo "› assembling ${BUNDLE}"
 rm -rf "${BUNDLE}"
 mkdir -p "${BUNDLE}/Contents/MacOS" "${BUNDLE}/Contents/Resources"
 cp ".build/release/${APP_NAME}" "${BUNDLE}/Contents/MacOS/${APP_NAME}"
+cp "Resources/AppIcon.icns" "${BUNDLE}/Contents/Resources/AppIcon.icns"
 
 cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -33,6 +34,7 @@ cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key>         <string>1.0</string>
     <key>CFBundleShortVersionString</key> <string>1.0</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
+    <key>CFBundleIconFile</key>        <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>  <string>14.0</string>
     <key>NSHighResolutionCapable</key> <true/>
     <key>LSUIElement</key>             <true/>
