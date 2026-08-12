@@ -924,7 +924,7 @@ final class SpatialController: ObservableObject {
 
             attachRenderedCursor(to: renderer, displayID: captureID)
             SystemCursor.hide()
-            cursorTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            cursorTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
                 SystemCursor.reassertHidden()
                 Task { @MainActor [weak self, weak renderer] in
                     guard let self, let renderer else { return }
