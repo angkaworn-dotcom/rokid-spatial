@@ -147,7 +147,6 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let sideVertexBuffers: [MTLBuffer]
 
     private var lastDrawTime = CFAbsoluteTimeGetCurrent()
-    private var cursorDrawLogged = false
 
     /// Frame-pacing counters, read and reset once a second by the status
     /// display. A "long" frame overshot the 120 Hz deadline by half a frame —
@@ -413,13 +412,6 @@ final class Renderer: NSObject, MTKViewDelegate {
             // its fractional position — its corners go through the same
             // surface mapping, so it follows curvature and the side swing.
             var cursorVertices: [SIMD4<Float>]?
-            if cursorDrawLogged == false, cursorPosition != nil {
-                cursorDrawLogged = true
-                let probe = cursorPosition?()
-                NSLog("RokidSpatial: cursor probe — position %@ texture %@",
-                      probe.map { "surface \($0.surface) uv \($0.uv)" } ?? "nil",
-                      cursorTexture == nil ? "missing" : "ok")
-            }
             if let position = cursorPosition?(), cursorTexture != nil {
                 // On a side surface, the cursor needs that side's geometry;
                 // skip drawing entirely if that side is not rendering.

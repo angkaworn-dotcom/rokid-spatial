@@ -300,9 +300,6 @@ final class SpatialController: ObservableObject {
         if d.object(forKey: "antiMoire") != nil { antiMoire = d.bool(forKey: "antiMoire") }
         if let v = SideScreens(rawValue: d.string(forKey: "sideScreens") ?? "") {
             sideScreens = v
-        } else if d.bool(forKey: "sideScreen") {
-            // Migrate the original single-side boolean.
-            sideScreens = .right
         }
         if let v = d.string(forKey: "desktopSize") { desktopSize = v }
         if let v = d.stringArray(forKey: "desktopSizes") { desktopSizes = v }
@@ -670,7 +667,6 @@ final class SpatialController: ObservableObject {
         }
 
         let mainBounds = CGDisplayBounds(displayID)
-        Self.appendLog("cursor attached — main bounds \(Int(mainBounds.width))×\(Int(mainBounds.height))")
         renderer.cursorTexture = texture
         (renderer.cursorFraction[0], renderer.cursorHotspotFraction[0]) = fractions(of: mainBounds)
 
@@ -684,10 +680,16 @@ final class SpatialController: ObservableObject {
              renderer.cursorHotspotFraction[index + 1]) = fractions(of: bounds)
         }
 
+        // Asking the window server for the pointer is an IPC round-trip;
+        // doing it on the render thread put that jitter inside the frame
+        // deadline. A dedicated poller keeps the freshest location in a
+        // locked box the render closure just reads.
+        let poller = mousePoller
+        poller.start()
         renderer.cursorPosition = {
             // CGEvent's location is global, top-left origin — the same space
             // as the displays' bounds.
-            guard let location = CGEvent(source: nil)?.location else { return nil }
+            guard let location = poller.location else { return nil }
             func uv(in bounds: CGRect) -> SIMD2<Float> {
                 SIMD2(Float((location.x - bounds.minX) / bounds.width),
                       Float((location.y - bounds.minY) / bounds.height))
@@ -699,6 +701,44 @@ final class SpatialController: ObservableObject {
             return nil
         }
     }
+
+    /// Polls the global pointer position at ~120 Hz on its own queue and
+    /// caches it for the render thread. One poll per frame still happens —
+    /// just no longer *on* the frame.
+    private final class MousePoller: @unchecked Sendable {
+        private let lock = NSLock()
+        private var current: CGPoint?
+        private var timer: DispatchSourceTimer?
+
+        var location: CGPoint? {
+            lock.lock()
+            defer { lock.unlock() }
+            return current
+        }
+
+        func start() {
+            guard timer == nil else { return }
+            let source = DispatchSource.makeTimerSource(
+                queue: DispatchQueue(label: "mouse-poller", qos: .userInteractive))
+            source.schedule(deadline: .now(), repeating: .milliseconds(8), leeway: .milliseconds(2))
+            source.setEventHandler { [weak self] in
+                guard let self else { return }
+                let location = CGEvent(source: nil)?.location
+                self.lock.lock()
+                self.current = location
+                self.lock.unlock()
+            }
+            source.resume()
+            timer = source
+        }
+
+        func stop() {
+            timer?.cancel()
+            timer = nil
+        }
+    }
+
+    private let mousePoller = MousePoller()
 
     /// The layout used while running. Order matters: the glasses' display goes
     /// last, because it is covered by an opaque overlay and any window landing
@@ -861,6 +901,7 @@ final class SpatialController: ObservableObject {
         sideDisplays.forEach { $0.destroy() }
         cursorTimer?.invalidate()
         cursorTimer = nil
+        mousePoller.stop()
         rateTimer?.invalidate()
         rateTimer = nil
         if let loop = imuLoop.get(), let imu {
