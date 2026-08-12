@@ -137,3 +137,44 @@ Decision: **Mac version stays 60 Hz** (1:1, clean image, daily driver).
 120 Hz effort moves to the Windows port, where custom timing tools (CRU)
 exist to fix the negotiation. macOS EDID overrides could in principle do
 custom timing too — parked unless someone feels brave.
+
+### SBS-90 built (2026-08-12, same day) — and what the eye said
+
+Mode 4 (3840×1200 @ 90 Hz SBS) first cleared a bare-desktop eye test via
+the new `--panel-mode=4 --hold=60` probe ("ไม่มีเส้นนะ ชัดดี"), so the
+Station-2-style mode was built as the opt-in **"SBS 90 Hz (stereo)"**
+toggle under glasses-only: a 1920×1200 @ 90 Hz virtual display is the
+working desktop (mode 4's own desktop is a 1920×600-point 16:5 sliver),
+the stereo render path draws per-eye viewports with the live IPD slider
+(range widened to 0–120 mm on request — it is a depth/comfort knob, not
+anatomy), and the whole set runs **standalone** — any mirror member
+harmonizes flips to 60. Sides L+R at 1920×1200@90 work.
+
+Measured: **90 fps avg, 0 slow** with the full wall (main + L+R sides,
+five displays online) once the machine is quiet; ~20 s of settling churn
+after start; heavy foreground load (a chat app streaming text) drags it
+to ~80 with hundreds of slow frames. 60 fps floor held except transient
+startup dips.
+
+The eye verdict with real content, refining the bare-desktop test:
+**faint grey lines exist at 90 too** — far weaker than the 120 Hz mode
+("ต้องสังเกตถึงเห็น"), *much* more visible on white backgrounds, and
+present even at a measured 90-flips-per-second 1:1 — so this is NOT
+frame duplication; the timing artifact simply scales with refresh rate
+(60 clean → 90 faint → 120 obvious). Stereo depth judged clearly better
+("มิติภาพดีกว่า"), sharpness good, motion smooth at 1:1. Daily-driver
+choice (clean 60 vs deep-but-faintly-lined 90) stays with the user.
+
+Traps found live during the build, all now defended:
+
+1. **The re-applied mirror is not always onto the glasses.** Creating
+   the side displays made macOS mirror the built-in onto the *left side*
+   virtual display; a glasses-focused mirror check missed it, a mirrored
+   display cannot be repositioned, and the wall watchdog looped once a
+   second forever. SBS's watchdog now faults on *any* mirrored display
+   (`DisplayManager.anyDisplayMirrored`), and the initial arrangement
+   clears mirrors first.
+2. **The settings window strands on the dark parked built-in.** The user
+   could see nothing clickable and had to ⌃⌥Esc. The window now
+   relocates to the origin display when an SBS session starts and on
+   every menu-bar reopen.
