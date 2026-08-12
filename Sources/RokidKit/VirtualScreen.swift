@@ -113,7 +113,12 @@ public final class VirtualScreen {
 
     /// Interpupillary distance in metres, used for stereo separation.
     public var ipd: Float = 0.063 {
-        didSet { ipd = min(max(ipd, 0.050), 0.076) }
+        // Far wider than anatomical IPD (54–74 mm) on purpose: this offset is
+        // a *comfort/depth tuning knob* against the panel's fixed SBS optics,
+        // not a measurement of the user's face. 0 renders flat — a useful
+        // reference point — and the top end doubles the depth effect. Widened
+        // from 50–76 mm on user request during the first SBS-90 session.
+        didSet { ipd = min(max(ipd, 0), 0.120) }
     }
 
     // MARK: State
