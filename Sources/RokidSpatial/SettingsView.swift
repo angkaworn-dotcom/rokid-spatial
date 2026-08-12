@@ -181,10 +181,10 @@ struct SettingsView: View {
                 }
 
                 // Eye separation for the stereo (SBS) render path. The range
-                // is deliberately wider than anatomical IPD — it is a depth/
-                // comfort tuning knob, with 0 = flat.
+                // is deliberately far wider than anatomical IPD — it is a
+                // depth tuning knob: 0 = flat, high = hyperstereo.
                 slider("IPD", value: $controller.ipd,
-                       range: 0...0.120, unit: "m", format: "%.3f")
+                       range: 0...0.200, unit: "m", format: "%.3f")
 
                 slider("Stabilizer", value: $controller.steady,
                        range: 0...0.060, unit: "s", format: "%.3f")
