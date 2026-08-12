@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // back onto the glasses' sliver (also seen live). Retry on a
         // schedule; each attempt acts only if the window is misplaced.
         runObserver = controller.$isRunning.sink { [weak self] running in
-            guard running, let self, self.controller.standaloneActive else { return }
+            guard running, let self, self.controller.source == .glassesOnly else { return }
             for delay in [1.0, 5.0, 10.0, 20.0] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                     self.relocateSettingsIfNeeded()
@@ -154,13 +154,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
-    /// During a standalone session, make sure the settings window sits on
-    /// the wall's main desktop (the display at the origin — the one the eye
-    /// sees). Its remembered position may be on the dark parked built-in or
-    /// under the glasses overlay, and macOS's re-applies can throw it back
-    /// there after an earlier fix.
+    /// During a glasses-only session (any variant), make sure the settings
+    /// window sits on the wall's main desktop (the display at the origin —
+    /// the one the eye sees straight ahead). macOS's arrangement shuffles
+    /// leave it on side screens (a head-turn away, which reads as "the
+    /// window won't open") or on hidden desktops in the standalone variants.
     private func relocateSettingsIfNeeded() {
-        guard controller.standaloneActive, controller.isRunning,
+        guard controller.isRunning, controller.source == .glassesOnly,
               let window = settingsWindow,
               let target = NSScreen.screens.first(where: { $0.frame.origin == .zero }),
               window.screen !== target else { return }
