@@ -400,6 +400,10 @@ final class SpatialController: ObservableObject {
             // The short-lived Bool this picker replaced, same day.
             sbsMode = .sbs90
         }
+        // 120 Hz left the picker (unsteady on this Mac; goal moved to the
+        // Windows port). A remembered 120 would be unswitchable-away-from.
+        // `--sbs=120` below still opts a research session in deliberately.
+        if sbsMode == .hz120 { sbsMode = .off }
         if let v = SideScreens(rawValue: d.string(forKey: "sideScreens") ?? "") {
             sideScreens = v
         }

@@ -116,8 +116,15 @@ struct SettingsView: View {
                            range: 0...10, unit: "°", format: "%.0f")
                 }
                 labelled("Panel mode") {
+                    // 120 Hz is hidden, not gone: WindowServer only holds
+                    // it steady in bursts (the direct-scanout research),
+                    // and an unsteady 120 reads worse than a rock-solid 60.
+                    // The user moved that goal to the Windows port. The
+                    // mode itself stays reachable via --sbs=120 for
+                    // future research sessions.
                     Picker("", selection: $controller.sbsMode) {
-                        ForEach(SpatialController.SBSMode.allCases) { mode in
+                        ForEach(SpatialController.SBSMode.allCases
+                            .filter { $0 != .hz120 }) { mode in
                             Text(mode.label).tag(mode)
                         }
                     }
