@@ -199,6 +199,12 @@ final class DisplayManager {
     /// very display it covers (verified empirically). So let macOS mirror the
     /// way it insists on, with the glasses as master so the desktop runs at
     /// panel-native size, and there is exactly one desktop anywhere.
+    /// Filled during `prepareGlassesOnly`: the desktop size actually in
+    /// effect, and every 16:10 scaled size the panel offers at ≥90 Hz — the
+    /// settings UI shows exactly this list rather than guessing.
+    private(set) var glassesDesktopSize = (width: 1920, height: 1200)
+    private(set) var availableDesktopSizes: [(width: Int, height: Int)] = []
+
     func prepareGlassesOnly(mode: DisplayMode, desktopSize: (width: Int, height: Int)? = nil) throws {
         previousMode = try? RokidDisplay.currentMode()
         try RokidDisplay.setMode(mode)
@@ -221,13 +227,40 @@ final class DisplayManager {
             Thread.sleep(forTimeInterval: 1.0)
         }
 
-        // Optionally run the desktop at a scaled resolution: everything gets
-        // bigger, the GPU upscales to the panel's native raster. The panel
-        // never sees anything but its own timing — this only changes the
-        // framebuffer the desktop is drawn into.
+        // Learn what the panel actually offers, then optionally run the
+        // desktop at a scaled resolution: everything gets bigger, the GPU
+        // upscales to the panel's native raster. The panel never sees
+        // anything but its own timing — this only changes the framebuffer
+        // the desktop is drawn into.
+        if let all = CGDisplayCopyAllDisplayModes(glassesID, nil) as? [CGDisplayMode] {
+            availableDesktopSizes = all
+                .filter { $0.width * 10 == $0.height * 16 && $0.refreshRate >= 90 }
+                .map { (width: $0.width, height: $0.height) }
+                .reduce(into: [(width: Int, height: Int)]()) { list, size in
+                    if !list.contains(where: { $0.width == size.width }) { list.append(size) }
+                }
+                .sorted { $0.width > $1.width }
+        }
         if let desktopSize {
             setDesktopResolution(glassesID, width: desktopSize.width, height: desktopSize.height)
         }
+        if let current = CGDisplayCopyDisplayMode(glassesID) {
+            glassesDesktopSize = (current.width, current.height)
+        }
+    }
+
+    /// macOS re-applies its remembered display mode during later
+    /// reconfigurations — creating the side displays reverted the main
+    /// desktop's size once already. Call after any reconfiguration to push
+    /// the chosen size back.
+    func reapplyDesktopSize() {
+        guard let glassesID = glassesDisplayID else { return }
+        let target = glassesDesktopSize
+        guard let current = CGDisplayCopyDisplayMode(glassesID),
+              current.width != target.width || current.height != target.height
+        else { return }
+        log?("glasses-only: macOS reverted the desktop to \(current.width)×\(current.height); reapplying \(target.width)×\(target.height)")
+        setDesktopResolution(glassesID, width: target.width, height: target.height)
     }
 
     /// Pick the display mode matching `width`×`height` with the highest

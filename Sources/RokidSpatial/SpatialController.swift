@@ -35,9 +35,21 @@ final class SpatialController: ObservableObject {
     @Published var height: Float = 0 { didSet { screen.verticalOffset = height; persist(height, "height") } }
     @Published var curved = false { didSet { screen.curved = curved; persist(curved, "curved") } }
     /// Glasses-only: extra virtual desktops rendered as screens hanging next
-    /// to the main one, triple-monitor style.
+    /// to the main one, triple-monitor style. Side screens are always created
+    /// at the main desktop's resolution, so the three screens match exactly.
     @Published var sideScreens: SideScreens = .none { didSet { persist(sideScreens.rawValue, "sideScreens") } }
-    @Published var sideResolution: VirtualResolution = .r1440x900 { didSet { persist(sideResolution.rawValue, "sideResolution") } }
+
+    /// Desktop size for glasses-only mode, e.g. "1600×1000". The option list
+    /// is discovered from the panel on the first run — only sizes the glasses
+    /// actually offer are shown.
+    @Published var desktopSize = "1920×1200" { didSet { persist(desktopSize, "desktopSize") } }
+    @Published var desktopSizes: [String] = ["1920×1200"]
+
+    private static func parseSize(_ label: String) -> (width: Int, height: Int)? {
+        let parts = label.split(separator: "×").compactMap { Int($0) }
+        guard parts.count == 2 else { return nil }
+        return (parts[0], parts[1])
+    }
 
     enum SideScreens: String, CaseIterable, Identifiable {
         case none
@@ -250,9 +262,8 @@ final class SpatialController: ObservableObject {
             // Migrate the original single-side boolean.
             sideScreens = .right
         }
-        if let v = VirtualResolution(rawValue: d.string(forKey: "sideResolution") ?? "") {
-            sideResolution = v
-        }
+        if let v = d.string(forKey: "desktopSize") { desktopSize = v }
+        if let v = d.stringArray(forKey: "desktopSizes") { desktopSizes = v }
 
         func load(_ key: String, into value: inout Float) {
             if d.object(forKey: key) != nil { value = d.float(forKey: key) }
@@ -327,40 +338,19 @@ final class SpatialController: ObservableObject {
             }
         }
 
-        // Side screens are ordinary virtual displays. Created before the
-        // display reconfiguration for the same reason as above; failure is
-        // never worth ending the whole session over.
-        if source == .glassesOnly {
-            for index in sideScreens.indices {
-                do {
-                    try sideDisplays[index].create(
-                        width: sideResolution.width,
-                        height: sideResolution.height,
-                        hiDPI: sideResolution.hiDPI,
-                        identity: UInt32(2 + index)
-                    )
-                } catch {
-                    Self.appendLog("side screen \(index) unavailable: \(error)")
-                }
-            }
-        }
-
         let displayMode = DisplayMode.highRefreshRate
         setStatus("Switching the glasses to 120 Hz…")
 
         // Display reconfiguration blocks for a few seconds while the panel
         // renegotiates, so keep it off the main thread.
-        // Native resolution needs no mode change; anything else is applied to
-        // the glasses display after the panel settles.
-        let desktopSize: (width: Int, height: Int)? =
-            virtualResolution == .r1920x1200
-                ? nil
-                : (virtualResolution.width, virtualResolution.height)
+        // Applied to the glasses display after the panel settles; the
+        // requested size falls back to the nearest one the panel offers.
+        let requestedSize = Self.parseSize(desktopSize)
 
         Task.detached(priority: .userInitiated) { [displays, source] in
             do {
                 if source == .glassesOnly {
-                    try displays.prepareGlassesOnly(mode: displayMode, desktopSize: desktopSize)
+                    try displays.prepareGlassesOnly(mode: displayMode, desktopSize: requestedSize)
                 } else {
                     // Let macOS enumerate the new display before rearranging.
                     Thread.sleep(forTimeInterval: 2.0)
@@ -407,6 +397,38 @@ final class SpatialController: ObservableObject {
             // One mirrored display set: there is nothing to arrange.
             applyArrangement()
             try? await Task.sleep(nanoseconds: 1_000_000_000)
+        } else {
+            // Publish the size list the panel actually offers — the picker
+            // shows real modes, not guesses.
+            let discovered = displays.availableDesktopSizes.map { "\($0.width)×\($0.height)" }
+            if !discovered.isEmpty {
+                desktopSizes = discovered
+                persist(discovered, "desktopSizes")
+            }
+
+            // Side displays are created at exactly the main desktop's
+            // effective size, so all screens match and windows keep their
+            // size when dragged across. Failure never ends the session.
+            let effective = displays.glassesDesktopSize
+            for index in sideScreens.indices {
+                do {
+                    try sideDisplays[index].create(
+                        width: effective.width, height: effective.height,
+                        hiDPI: false, identity: UInt32(2 + index)
+                    )
+                } catch {
+                    Self.appendLog("side screen \(index) unavailable: \(error)")
+                }
+            }
+            // Let the window server enumerate them before capture, then push
+            // the main desktop's size back — creating displays makes macOS
+            // re-apply the mode it remembers, undoing the chosen size.
+            if !sideScreens.indices.isEmpty {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                await Task.detached { [displays] in
+                    displays.reapplyDesktopSize()
+                }.value
+            }
         }
 
         guard let renderer = Renderer(filter: filter, screen: screen) else {
@@ -473,7 +495,9 @@ final class SpatialController: ObservableObject {
 
             // Side screens, for those whose displays came up: right sits to
             // the right of the main desktop and left to the left, so the
-            // pointer leaves on the side the eye sees the screen.
+            // pointer leaves on the side the eye sees the screen. Position
+            // everything first, then re-assert the main desktop's size —
+            // every reconfiguration invites macOS to revert it.
             for index in sideScreens.indices {
                 guard let sideID = sideDisplays[index].displayID else { continue }
                 if index == 0 {
@@ -481,6 +505,14 @@ final class SpatialController: ObservableObject {
                 } else {
                     displays.positionToLeft(sideID, of: captureID)
                 }
+            }
+            if !sideScreens.indices.isEmpty {
+                await Task.detached { [displays] in
+                    displays.reapplyDesktopSize()
+                }.value
+            }
+            for index in sideScreens.indices {
+                guard let sideID = sideDisplays[index].displayID else { continue }
                 let sideCapture = sideCaptures[index]
                 sideCapture.onFrame = { [weak renderer] buffer in
                     renderer?.submitSide(index, frame: buffer)

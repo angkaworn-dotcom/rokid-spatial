@@ -99,16 +99,6 @@ struct SettingsView: View {
                     .disabled(controller.isRunning)
                 }
                 if controller.sideScreens != .none {
-                    labelled("Side size") {
-                        Picker("", selection: $controller.sideResolution) {
-                            ForEach(SpatialController.VirtualResolution.allCases) { resolution in
-                                Text(resolution.label).tag(resolution)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .disabled(controller.isRunning)
-                    }
                     slider("Gap", value: $controller.screenGap,
                            range: 0...10, unit: "°", format: "%.0f")
                 }
@@ -140,7 +130,7 @@ struct SettingsView: View {
     private var advanced: some View {
         DisclosureGroup("More", isExpanded: $showAdvanced) {
             VStack(alignment: .leading, spacing: 10) {
-                if controller.source == .virtualDesktop || controller.source == .glassesOnly {
+                if controller.source == .virtualDesktop {
                     labelled("Desktop size") {
                         Picker("", selection: $controller.virtualResolution) {
                             ForEach(SpatialController.VirtualResolution.allCases) { resolution in
@@ -151,10 +141,21 @@ struct SettingsView: View {
                         .labelsHidden()
                         .disabled(controller.isRunning)
                     }
-                }
-                if controller.source == .virtualDesktop {
                     Toggle("Work in the glasses", isOn: $controller.virtualIsMain)
                         .disabled(controller.isRunning)
+                }
+                if controller.source == .glassesOnly {
+                    // Options come from the panel itself, learned on the
+                    // first run; applies to all three screens.
+                    labelled("Desktop size (all screens)") {
+                        Picker("", selection: $controller.desktopSize) {
+                            ForEach(controller.desktopSizes, id: \.self) { size in
+                                Text(size).tag(size)
+                            }
+                        }
+                        .labelsHidden()
+                        .disabled(controller.isRunning)
+                    }
                 }
 
                 Button("Fit for sharpness") { controller.fitForSharpness() }
