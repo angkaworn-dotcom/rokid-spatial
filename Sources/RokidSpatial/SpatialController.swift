@@ -295,6 +295,13 @@ final class SpatialController: ObservableObject {
     /// Re-hides the hardware cursor at 10 Hz while glasses-only mode runs —
     /// any app changing the cursor shape makes it visible again.
     private var cursorTimer: Timer?
+    /// Identity of the cursor image the current sprite was built from —
+    /// the cheap "has the shape changed" check for the 10 Hz update.
+    private var cursorSpriteID: ObjectIdentifier?
+    /// Display geometry the sprite fractions are computed against,
+    /// captured once at session start for the shape updates that follow.
+    private var cursorMainBounds = CGRect.zero
+    private var cursorSideBounds: [CGRect?] = [nil, nil]
 
     // Health watchdog. The overlay is opaque, full-screen and always on top,
     // so anything that leaves it up while the desktop underneath is unusable
@@ -919,45 +926,30 @@ final class SpatialController: ObservableObject {
             SystemCursor.hide()
             cursorTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
                 SystemCursor.reassertHidden()
+                Task { @MainActor [weak self, weak renderer] in
+                    guard let self, let renderer else { return }
+                    self.updateCursorSprite(renderer: renderer)
+                }
             }
         }
     }
 
     /// Give the renderer everything it needs to draw the cursor itself:
-    /// the arrow sprite, its hotspot, and a per-frame position — all as
+    /// the current sprite, its hotspot, and a per-frame position — all as
     /// fractions of the captured display.
     private func attachRenderedCursor(to renderer: Renderer, displayID: CGDirectDisplayID) {
-        let cursor = NSCursor.arrow
-        let image = cursor.image
-        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
-        else { return }
-
-        let loader = MTKTextureLoader(device: renderer.device)
-        guard let texture = try? loader.newTexture(
-            cgImage: cgImage,
-            options: [.SRGB: false, .textureUsage: MTLTextureUsage.shaderRead.rawValue]
-        ) else { return }
-
-        let imageSize = SIMD2(Float(image.size.width), Float(image.size.height))
-        let hotspot = SIMD2(Float(cursor.hotSpot.x), Float(cursor.hotSpot.y))
-        func fractions(of bounds: CGRect) -> (size: SIMD2<Float>, hotspot: SIMD2<Float>) {
-            let display = SIMD2(Float(bounds.width), Float(bounds.height))
-            return (imageSize / display, hotspot / display)
-        }
-
         let mainBounds = CGDisplayBounds(displayID)
-        renderer.cursorTexture = texture
-        (renderer.cursorFraction[0], renderer.cursorHotspotFraction[0]) = fractions(of: mainBounds)
 
         // Surface n+1 is side screen n (0 right, 1 left).
         var sideBounds: [CGRect?] = [nil, nil]
         for index in sideScreens.indices {
             guard let id = sideDisplays[index].displayID else { continue }
-            let bounds = CGDisplayBounds(id)
-            sideBounds[index] = bounds
-            (renderer.cursorFraction[index + 1],
-             renderer.cursorHotspotFraction[index + 1]) = fractions(of: bounds)
+            sideBounds[index] = CGDisplayBounds(id)
         }
+        cursorMainBounds = mainBounds
+        cursorSideBounds = sideBounds
+        cursorSpriteID = nil
+        updateCursorSprite(renderer: renderer)
 
         // Asking the window server for the pointer is an IPC round-trip;
         // doing it on the render thread put that jitter inside the frame
@@ -1319,6 +1311,44 @@ final class SpatialController: ObservableObject {
         guard let layer = metalView?.layer as? CAMetalLayer else { return }
         layer.developerHUDProperties = metalHUD ? ["mode": "default"] : nil
         if metalHUD { Self.appendLog("Metal HUD enabled on the overlay layer") }
+    }
+
+    /// The cursor sprite follows the *system* cursor's current shape —
+    /// resize arrows at window edges, the I-beam over text, the pointing
+    /// hand over links — so the in-glasses cursor gives the same
+    /// affordances the real one does. Runs on the existing 10 Hz cursor
+    /// timer; rebuilds the texture only when the shape actually changes.
+    /// (The system cursor stays hidden the whole time; apps keep setting
+    /// their cursor rects regardless, which is what currentSystem reads.)
+    private func updateCursorSprite(renderer: Renderer) {
+        let cursor = NSCursor.currentSystem ?? NSCursor.arrow
+        let image = cursor.image
+        guard ObjectIdentifier(image) != cursorSpriteID else { return }
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else { return }
+
+        let loader = MTKTextureLoader(device: renderer.device)
+        guard let texture = try? loader.newTexture(
+            cgImage: cgImage,
+            options: [.SRGB: false, .textureUsage: MTLTextureUsage.shaderRead.rawValue]
+        ) else { return }
+        cursorSpriteID = ObjectIdentifier(image)
+
+        let imageSize = SIMD2(Float(image.size.width), Float(image.size.height))
+        let hotspot = SIMD2(Float(cursor.hotSpot.x), Float(cursor.hotSpot.y))
+        func fractions(of bounds: CGRect) -> (size: SIMD2<Float>, hotspot: SIMD2<Float>) {
+            let display = SIMD2(Float(bounds.width), Float(bounds.height))
+            return (imageSize / display, hotspot / display)
+        }
+
+        var fraction = [SIMD2<Float>](repeating: .zero, count: 3)
+        var hotspots = [SIMD2<Float>](repeating: .zero, count: 3)
+        (fraction[0], hotspots[0]) = fractions(of: cursorMainBounds)
+        for (index, bounds) in cursorSideBounds.enumerated() {
+            guard let bounds else { continue }
+            (fraction[index + 1], hotspots[index + 1]) = fractions(of: bounds)
+        }
+        renderer.setCursorSprite(texture: texture, fraction: fraction, hotspot: hotspots)
     }
 
     private func createOverlayWindow(renderer: Renderer) {

@@ -112,13 +112,29 @@ final class Renderer: NSObject, MTKViewDelegate {
     // sprite at the same spot on the virtual screen. All coordinates are
     // fractions of the captured display so the shader stays resolution-blind.
 
-    /// Arrow sprite; nil disables cursor drawing entirely (other modes).
-    var cursorTexture: MTLTexture?
+    /// Current cursor sprite; nil disables cursor drawing entirely (other
+    /// modes). Swapped from the main thread whenever the system cursor
+    /// changes shape (resize arrows, I-beam, pointing hand) and read on the
+    /// render thread — hence the lock and the one-shot snapshot in draw.
+    private var cursorTexture: MTLTexture?
+    private let cursorLock = NSLock()
     /// Cursor image size as a fraction of each captured display (index 0 is
     /// the main screen, then the side screens — point sizes differ).
-    var cursorFraction = [SIMD2<Float>](repeating: .zero, count: 3)
+    private var cursorFraction = [SIMD2<Float>](repeating: .zero, count: 3)
     /// Hotspot offset within the image, as a fraction of each display.
-    var cursorHotspotFraction = [SIMD2<Float>](repeating: .zero, count: 3)
+    private var cursorHotspotFraction = [SIMD2<Float>](repeating: .zero, count: 3)
+
+    /// Swap the drawn cursor: sprite, its per-surface size and hotspot.
+    func setCursorSprite(texture: MTLTexture?,
+                         fraction: [SIMD2<Float>],
+                         hotspot: [SIMD2<Float>]) {
+        cursorLock.lock()
+        cursorTexture = texture
+        cursorFraction = fraction
+        cursorHotspotFraction = hotspot
+        cursorLock.unlock()
+    }
+
     /// Called each frame; returns which surface the cursor is on (0 main,
     /// 1 right side, 2 left side) and its UV (0…1, top-left origin), or nil
     /// to skip drawing.
@@ -411,16 +427,21 @@ final class Renderer: NSObject, MTKViewDelegate {
             // The cursor quad sits on whichever surface the mouse is on, at
             // its fractional position — its corners go through the same
             // surface mapping, so it follows curvature and the side swing.
+            cursorLock.lock()
+            let sprite = cursorTexture
+            let spriteFractions = cursorFraction
+            let spriteHotspots = cursorHotspotFraction
+            cursorLock.unlock()
             var cursorVertices: [SIMD4<Float>]?
-            if let position = cursorPosition?(), cursorTexture != nil {
+            if let position = cursorPosition?(), sprite != nil {
                 // On a side surface, the cursor needs that side's geometry;
                 // skip drawing entirely if that side is not rendering.
                 let side = position.surface > 0
                     ? sideRender.first(where: { $0.index == position.surface - 1 })
                     : nil
                 if position.surface == 0 || side != nil {
-                    let fraction = cursorFraction[position.surface]
-                    let hotspot = cursorHotspotFraction[position.surface]
+                    let fraction = spriteFractions[position.surface]
+                    let hotspot = spriteHotspots[position.surface]
                     let aspect = side?.aspect ?? contentAspect
                     let u0 = position.uv.x - hotspot.x
                     let v0 = position.uv.y - hotspot.y
@@ -470,12 +491,12 @@ final class Renderer: NSObject, MTKViewDelegate {
                                            vertexCount: Self.meshVertexCount)
                 }
 
-                if let cursorVertices, let cursorTexture {
+                if let cursorVertices, let sprite {
                     encoder.setRenderPipelineState(cursorPipeline)
                     encoder.setVertexBytes(cursorVertices,
                                            length: MemoryLayout<SIMD4<Float>>.stride * cursorVertices.count,
                                            index: 0)
-                    encoder.setFragmentTexture(cursorTexture, index: 0)
+                    encoder.setFragmentTexture(sprite, index: 0)
                     encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 }
             }
