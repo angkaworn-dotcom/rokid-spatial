@@ -21,9 +21,16 @@ if CommandLine.arguments.contains("--restore-displays") {
 // Debug probe: switch the panel to a numbered mode (see DisplayMode), wait
 // for enumeration, print every desktop mode macOS then offers, and exit.
 // `--panel-mode=4` was added to scope the Station-2-style 90 Hz SBS route.
+// `--hold=N` keeps the mode up for N seconds before restoring — long enough
+// to drag a window around and judge by eye whether the 120 Hz-mode faint
+// grey lines also afflict the 90 Hz SBS mode. (In SBS the desktop appears
+// sliced in half, one half per eye — that's expected; only the lines matter.)
 if let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--panel-mode=") }),
    let raw = UInt16(arg.dropFirst("--panel-mode=".count)),
    let mode = DisplayMode(rawValue: raw) {
+    let hold = CommandLine.arguments
+        .first { $0.hasPrefix("--hold=") }
+        .flatMap { Double($0.dropFirst("--hold=".count)) } ?? 5
     do {
         let previous = try RokidDisplay.currentMode()
         print("current mode: \(previous), switching to \(mode)")
@@ -42,6 +49,10 @@ if let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--panel-mode=") 
                              m.width, m.height, m.refreshRate, m.pixelWidth, m.pixelHeight,
                              m.isUsableForDesktopGUI() ? "" : "  (not desktop-usable)"))
             }
+        }
+        if hold > 5 {
+            print("holding \(mode) for \(Int(hold - 5)) more seconds — look for faint grey lines while dragging a window")
+            Thread.sleep(forTimeInterval: hold - 5)
         }
         print("restoring mode \(previous)")
         _ = try RokidDisplay.setMode(previous)
