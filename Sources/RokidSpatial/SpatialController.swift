@@ -295,9 +295,12 @@ final class SpatialController: ObservableObject {
     /// Re-hides the hardware cursor at 10 Hz while glasses-only mode runs —
     /// any app changing the cursor shape makes it visible again.
     private var cursorTimer: Timer?
-    /// Identity of the cursor image the current sprite was built from —
-    /// the cheap "has the shape changed" check for the 10 Hz update.
-    private var cursorSpriteID: ObjectIdentifier?
+    /// The cursor image the current sprite was built from — held strongly,
+    /// because the "has the shape changed" check is pointer identity and a
+    /// deallocated image's address gets reused by the next shape (seen
+    /// live: shape changes randomly delayed 0.5-1 s while the OS-side
+    /// report was measured at 14 ms).
+    private var cursorSpriteImage: NSImage?
     /// Display geometry the sprite fractions are computed against,
     /// captured once at session start for the shape updates that follow.
     private var cursorMainBounds = CGRect.zero
@@ -948,7 +951,7 @@ final class SpatialController: ObservableObject {
         }
         cursorMainBounds = mainBounds
         cursorSideBounds = sideBounds
-        cursorSpriteID = nil
+        cursorSpriteImage = nil
         updateCursorSprite(renderer: renderer)
 
         // Asking the window server for the pointer is an IPC round-trip;
@@ -1323,7 +1326,7 @@ final class SpatialController: ObservableObject {
     private func updateCursorSprite(renderer: Renderer) {
         let cursor = NSCursor.currentSystem ?? NSCursor.arrow
         let image = cursor.image
-        guard ObjectIdentifier(image) != cursorSpriteID else { return }
+        guard image !== cursorSpriteImage else { return }
         guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         else { return }
 
@@ -1332,7 +1335,7 @@ final class SpatialController: ObservableObject {
             cgImage: cgImage,
             options: [.SRGB: false, .textureUsage: MTLTextureUsage.shaderRead.rawValue]
         ) else { return }
-        cursorSpriteID = ObjectIdentifier(image)
+        cursorSpriteImage = image
 
         let imageSize = SIMD2(Float(image.size.width), Float(image.size.height))
         let hotspot = SIMD2(Float(cursor.hotSpot.x), Float(cursor.hotSpot.y))
