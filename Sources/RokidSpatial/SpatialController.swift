@@ -681,7 +681,13 @@ final class SpatialController: ObservableObject {
         // paints its own sprite at the same position instead, so exactly one
         // cursor exists and it lives on the virtual screen.
         if source == .glassesOnly {
-            if let deskID = displays.deskDisplayID {
+            // SBS-60 keeps the built-in lit: it mirrors the working desktop,
+            // so the laptop shows exactly what the glasses show — take the
+            // glasses off and the work is still in front of you. Dimming it
+            // made everything vanish from the physical screen the moment the
+            // desktops merged (user hit the emergency stop over it, live).
+            // The other variants park it dark as before.
+            if sbsMode != .sbs60, let deskID = displays.deskDisplayID {
                 savedBrightness = BuiltinBrightness.get(deskID) ?? 0.5
                 BuiltinBrightness.set(deskID, to: 0)
             }
