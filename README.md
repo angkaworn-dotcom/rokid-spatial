@@ -102,6 +102,8 @@ earn its way back.
 | End-to-end use over a long session | ⚠️ needs real-world tuning |
 | Windows | ⬜ see [PORTING.md](PORTING.md) |
 
+What's next, and in what order: [ROADMAP.md](ROADMAP.md).
+
 ## Running it
 
 ```bash
