@@ -107,6 +107,8 @@ final class SpatialController: ObservableObject {
     @Published var headDownPeek = false { didSet { renderer?.headDownPeek = headDownPeek; persist(headDownPeek, "headDownPeek") } }
     /// Pitch angle (degrees) where the head-down fade starts.
     @Published var peekAngle: Float = 35 { didSet { renderer?.peekAngle = peekAngle; persist(peekAngle, "peekAngle") } }
+    /// Night-Shift-style warmth inside our render pipeline, 0 = off.
+    @Published var eyeCare: Float = 0 { didSet { renderer?.eyeCare = eyeCare; persist(eyeCare, "eyeCare") } }
     /// Glasses panel variants beyond the default 60 Hz 2D: stereo SBS at 60
     /// or 90 (per-eye rendering with the IPD offset onto a separate working
     /// virtual display), and plain 120 Hz (mode 3, no stereo — the glasses'
@@ -451,6 +453,7 @@ final class SpatialController: ObservableObject {
         load("motionLock", into: &motionLock)
         load("screenGap", into: &screenGap)
         load("peekAngle", into: &peekAngle)
+        load("eyeCare", into: &eyeCare)
 
         // Property observers don't fire during init, so the loaded values
         // have to be pushed into the render-side objects by hand.
@@ -777,6 +780,7 @@ final class SpatialController: ObservableObject {
         renderer.antiMoire = antiMoire
         renderer.headDownPeek = headDownPeek
         renderer.peekAngle = peekAngle
+        renderer.eyeCare = eyeCare
         renderer.targetFPS = frameRate
         renderer.sideGap = screenGap * .pi / 180
         self.renderer = renderer
@@ -948,6 +952,7 @@ final class SpatialController: ObservableObject {
 
             attachRenderedCursor(to: renderer, displayID: captureID)
             SystemCursor.hide()
+            DockAutoHide.engage()
             cursorTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
                 SystemCursor.reassertHidden()
                 Task { @MainActor [weak self, weak renderer] in
@@ -1089,6 +1094,7 @@ final class SpatialController: ObservableObject {
             for sideCapture in sideCaptures { await sideCapture.stop() }
             teardown()
             restoreBrightness()
+            DockAutoHide.restore()
             isRunning = false
             if source == .glassesOnly {
                 // Mirroring stays — it is the desired end state, so there is
@@ -1183,6 +1189,7 @@ final class SpatialController: ObservableObject {
         Self.appendLog("Quit — tearing down")
         teardown()
         restoreBrightness()
+        DockAutoHide.restore()
         isRunning = false
         if source == .glassesOnly {
             // Mirroring is the desired end state here: no fight, no helper.
@@ -1210,6 +1217,7 @@ final class SpatialController: ObservableObject {
         setStatus(message, isError: true)
         teardown()
         restoreBrightness()
+        DockAutoHide.restore()
         if source == .glassesOnly {
             displays.restorePanelOnly(remirror: standaloneActive)
         } else {
@@ -1701,6 +1709,7 @@ final class SpatialController: ObservableObject {
         NSLog("RokidSpatial: emergency stop")
         teardown()
         restoreBrightness()
+        DockAutoHide.restore()
         if source == .glassesOnly {
             displays.restorePanelOnly(remirror: standaloneActive)
         } else {

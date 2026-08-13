@@ -13,6 +13,7 @@ import RokidKit
 if CommandLine.arguments.contains("--restore-displays") {
     AppLog.append("helper: restoring displays")
     SystemCursor.setScale(1)
+    DockAutoHide.restore()
     let displays = DisplayManager()
     displays.log = { AppLog.append("helper: " + $0) }
     displays.restore()
@@ -104,8 +105,10 @@ if CommandLine.arguments.contains("--query-sweep") {
 }
 
 // A crash while the cursor was scaled to nothing would leave it tiny
-// system-wide with no one to restore it; every launch puts it right.
+// system-wide with no one to restore it; every launch puts it right. Same
+// for a Dock left force-hidden.
 SystemCursor.setScale(1)
+DockAutoHide.restore()
 
 let application = NSApplication.shared
 // Top-level code is not main-actor isolated here, but it does run on the main

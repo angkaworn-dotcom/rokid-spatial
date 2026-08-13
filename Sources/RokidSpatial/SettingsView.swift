@@ -182,6 +182,9 @@ struct SettingsView: View {
                 }
                 Toggle("Anti-moiré resample", isOn: $controller.antiMoire)
 
+                slider("Eye care", value: $controller.eyeCare,
+                       range: 0...1, unit: "", format: "%.2f")
+
                 Toggle("Head-down peek", isOn: $controller.headDownPeek)
                 if controller.headDownPeek {
                     slider("Peek angle", value: $controller.peekAngle,

@@ -39,7 +39,7 @@ vertex VertexOut vertexMain(uint vid [[vertex_id]],
 
 fragment float4 fragmentMain(VertexOut in [[stage_in]],
                              texture2d<float, access::sample> tex [[texture(0)]],
-                             constant float &dim [[buffer(0)]])
+                             constant float4 &tint [[buffer(0)]])
 {
     // No mip filtering, deliberately. Mipmapping trades sharpness for reduced
     // aliasing, and sharpness is the scarcer resource here: the desktop is
@@ -48,7 +48,7 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
     constexpr sampler smp(mag_filter::linear,
                           min_filter::linear,
                           address::clamp_to_edge);
-    return float4(tex.sample(smp, in.uv).rgb * dim, 1.0);
+    return float4(tex.sample(smp, in.uv).rgb * tint.rgb * tint.a, 1.0);
 }
 
 // Anti-moiré variant: a 4-tap rotated-grid supersample, taps spread across
@@ -59,7 +59,7 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
 // at the cost of a slight softening.
 fragment float4 fragmentSmooth(VertexOut in [[stage_in]],
                                texture2d<float, access::sample> tex [[texture(0)]],
-                               constant float &dim [[buffer(0)]])
+                               constant float4 &tint [[buffer(0)]])
 {
     constexpr sampler smp(mag_filter::linear,
                           min_filter::linear,
@@ -69,18 +69,19 @@ fragment float4 fragmentSmooth(VertexOut in [[stage_in]],
              + tex.sample(smp, in.uv - 0.375*dx + 0.125*dy).rgb
              + tex.sample(smp, in.uv - 0.125*dx - 0.375*dy).rgb
              + tex.sample(smp, in.uv + 0.375*dx - 0.125*dy).rgb;
-    return float4(c * 0.25 * dim, 1.0);
+    return float4(c * 0.25 * tint.rgb * tint.a, 1.0);
 }
 
 // The cursor sprite keeps its alpha — it is blended over the desktop quad.
 fragment float4 fragmentCursor(VertexOut in [[stage_in]],
                                texture2d<float, access::sample> tex [[texture(0)]],
-                               constant float &dim [[buffer(0)]])
+                               constant float4 &tint [[buffer(0)]])
 {
     constexpr sampler smp(mag_filter::linear,
                           min_filter::linear,
                           address::clamp_to_edge);
-    return tex.sample(smp, in.uv) * dim;
+    float4 c = tex.sample(smp, in.uv);
+    return float4(c.rgb * tint.rgb * tint.a, c.a * tint.a);
 }
 """
 
@@ -113,6 +114,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// User-tunable — how deep a "glance at the keyboard" is depends on
     /// posture and screen height.
     var peekAngle: Float = 35
+
+    /// Eye-care warmth, 0 (off) to 1: pulls blue (and a little green) out of
+    /// every fragment, Night-Shift style, but inside our own pipeline — so
+    /// it applies in every mode and costs nothing extra.
+    var eyeCare: Float = 0
 
     /// The frame-duration budget a draw is judged against, matching the
     /// panel's configured refresh rate.
@@ -421,7 +427,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             let start = peekAngle * .pi / 180
             dim = 1 - simd_smoothstep(start, start + 20 * .pi / 180, pitchDown)
         }
-        encoder.setFragmentBytes(&dim, length: MemoryLayout<Float>.size, index: 0)
+        // rgb = per-channel gains (eye-care warmth), a = overall dim (peek).
+        var tint = SIMD4<Float>(1, 1 - 0.18 * eyeCare, 1 - 0.38 * eyeCare, dim)
+        encoder.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.size, index: 0)
 
         if let texture {
             let width = Double(view.drawableSize.width)

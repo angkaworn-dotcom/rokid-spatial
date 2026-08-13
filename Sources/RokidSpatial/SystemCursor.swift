@@ -83,7 +83,15 @@ enum SystemCursor {
     /// hovering text, a window edge, a link — the window server makes the
     /// cursor visible again. Call this frequently while the overlay is up.
     static func reassertHidden() {
-        guard hideCount > 0, isVisible else { return }
+        guard hideCount > 0 else { return }
+        // The scale is last-writer-wins across the whole window server, and
+        // something system-side (likely the accessibility pointer-size
+        // owner) writes 1.0 back at its leisure — proven live: a probe's
+        // 3× grew the cursor mid-Dock-hover, yet the app's one-shot 0.005
+        // did not stick. Re-assert every tick; their writes are occasional,
+        // ours are 20 Hz.
+        setScale(0.005)
+        guard isVisible else { return }
         CGDisplayHideCursor(CGMainDisplayID())
         hideCount += 1
     }
