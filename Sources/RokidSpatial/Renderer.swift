@@ -80,26 +80,18 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
     return float4(c * params.tint.rgb * params.tint.a, 1.0);
 }
 
-// Crisp-sampling variant: Catmull-Rom in 9 bilinear taps. Plain bilinear
-// visibly blurs text whenever the desktop is *magnified* onto more panel
-// pixels than it has points (the small virtual-desktop sizes); Catmull-Rom's
-// negative lobes keep edges tight, and at 1:1 it degrades gracefully to
-// nearly the same image. The 9-tap trick: evaluate the 4×4 kernel as 3×3
-// bilinear fetches whose offsets encode the weights.
-fragment float4 fragmentCrisp(VertexOut in [[stage_in]],
-                              texture2d<float, access::sample> tex [[texture(0)]],
-                              constant FragParams &params [[buffer(0)]])
+// Catmull-Rom in 9 bilinear taps — the 4×4 kernel evaluated as 3×3
+// bilinear fetches whose offsets encode the weights. Negative lobes keep
+// edges tight where plain bilinear smears them.
+static float3 catmullSample(texture2d<float, access::sample> tex,
+                            sampler smp, float2 uv)
 {
-    constexpr sampler smp(mag_filter::linear,
-                          min_filter::linear,
-                          address::clamp_to_edge);
     float2 size = float2(tex.get_width(), tex.get_height());
-    float2 pos = in.uv * size;
+    float2 pos = uv * size;
     float2 centre = floor(pos - 0.5) + 0.5;
     float2 f = pos - centre;
     float2 f2 = f * f, f3 = f2 * f;
 
-    // Catmull-Rom weights per axis.
     float2 w0 = -0.5 * f3 + f2 - 0.5 * f;
     float2 w1 =  1.5 * f3 - 2.5 * f2 + 1.0;
     float2 w2 = -1.5 * f3 + 2.0 * f2 + 0.5 * f;
@@ -120,7 +112,21 @@ fragment float4 fragmentCrisp(VertexOut in [[stage_in]],
         tex.sample(smp, float2(t0.x,  t3.y)).rgb  * w0.x  * w3.y +
         tex.sample(smp, float2(t12.x, t3.y)).rgb  * w12.x * w3.y +
         tex.sample(smp, float2(t3.x,  t3.y)).rgb  * w3.x  * w3.y;
-    c = max(c, 0.0);
+    return max(c, 0.0);
+}
+
+// Crisp-sampling variant: Catmull-Rom instead of bilinear. Plain bilinear
+// visibly blurs text whenever the desktop is *magnified* onto more panel
+// pixels than it has points (the small virtual-desktop sizes); at 1:1 it
+// degrades gracefully to nearly the same image.
+fragment float4 fragmentCrisp(VertexOut in [[stage_in]],
+                              texture2d<float, access::sample> tex [[texture(0)]],
+                              constant FragParams &params [[buffer(0)]])
+{
+    constexpr sampler smp(mag_filter::linear,
+                          min_filter::linear,
+                          address::clamp_to_edge);
+    float3 c = catmullSample(tex, smp, in.uv);
     if (params.misc.x > 0.001) {
         c = sharpened(c, tex, smp, in.uv, params.misc.x);
     }
@@ -205,7 +211,11 @@ fragment AccumOut fragmentAccum(VertexOut in [[stage_in]],
                         mx = max(mx, s);
                     }
                 }
-                float3 hist = clamp(history.sample(smp, uvPrev).rgb, mn, mx);
+                // Catmull-Rom, not bilinear: the history is resampled every
+                // frame, and bilinear's smear compounds under accumulation —
+                // "text is sharper with it off" was the live verdict on the
+                // bilinear version.
+                float3 hist = clamp(catmullSample(history, smp, uvPrev), mn, mx);
                 outc = mix(cur, hist, p.info.z);
             }
         }
