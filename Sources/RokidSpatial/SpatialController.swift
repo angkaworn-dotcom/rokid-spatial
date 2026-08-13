@@ -102,6 +102,8 @@ final class SpatialController: ObservableObject {
     /// Fade the render to black as the head pitches down (35-55°), so a
     /// glance at the keyboard sees the real desk through the optics.
     @Published var headDownPeek = false { didSet { renderer?.headDownPeek = headDownPeek; persist(headDownPeek, "headDownPeek") } }
+    /// Pitch angle (degrees) where the head-down fade starts.
+    @Published var peekAngle: Float = 35 { didSet { renderer?.peekAngle = peekAngle; persist(peekAngle, "peekAngle") } }
     /// Glasses panel variants beyond the default 60 Hz 2D: stereo SBS at 60
     /// or 90 (per-eye rendering with the IPD offset onto a separate working
     /// virtual display), and plain 120 Hz (mode 3, no stereo — the glasses'
@@ -436,6 +438,7 @@ final class SpatialController: ObservableObject {
         load("steady", into: &steady)
         load("motionLock", into: &motionLock)
         load("screenGap", into: &screenGap)
+        load("peekAngle", into: &peekAngle)
 
         // Property observers don't fire during init, so the loaded values
         // have to be pushed into the render-side objects by hand.
@@ -761,6 +764,7 @@ final class SpatialController: ObservableObject {
         renderer.steady = steady
         renderer.antiMoire = antiMoire
         renderer.headDownPeek = headDownPeek
+        renderer.peekAngle = peekAngle
         renderer.targetFPS = frameRate
         renderer.sideGap = screenGap * .pi / 180
         self.renderer = renderer

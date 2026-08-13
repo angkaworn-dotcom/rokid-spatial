@@ -183,6 +183,10 @@ struct SettingsView: View {
                 Toggle("Anti-moiré resample", isOn: $controller.antiMoire)
 
                 Toggle("Head-down peek", isOn: $controller.headDownPeek)
+                if controller.headDownPeek {
+                    slider("Peek angle", value: $controller.peekAngle,
+                           range: 10...60, unit: "\u{b0}", format: "%.0f")
+                }
 
                 Toggle("Performance HUD", isOn: $controller.metalHUD)
                 if controller.metalHUD != controller.metalHUDAtLaunch {

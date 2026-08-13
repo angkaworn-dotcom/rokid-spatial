@@ -109,8 +109,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// an angle range rather than a switch, and the pose it reads is already
     /// steady-smoothed, so there is nothing to debounce.
     var headDownPeek = false
-    private static let peekStart: Float = 35 * .pi / 180
-    private static let peekFull: Float = 55 * .pi / 180
+    /// Pitch (degrees) where the fade begins; fully dark 20 degrees later.
+    /// User-tunable — how deep a "glance at the keyboard" is depends on
+    /// posture and screen height.
+    var peekAngle: Float = 35
 
     /// The frame-duration budget a draw is judged against, matching the
     /// panel's configured refresh rate.
@@ -400,7 +402,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         if headDownPeek {
             let forward = head.act(SIMD3<Float>(0, 0, -1))
             let pitchDown = asin(max(-1, min(1, -forward.y)))
-            dim = 1 - simd_smoothstep(Self.peekStart, Self.peekFull, pitchDown)
+            let start = peekAngle * .pi / 180
+            dim = 1 - simd_smoothstep(start, start + 20 * .pi / 180, pitchDown)
         }
         encoder.setFragmentBytes(&dim, length: MemoryLayout<Float>.size, index: 0)
 
