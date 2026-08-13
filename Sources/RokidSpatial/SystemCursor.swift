@@ -21,6 +21,7 @@ enum SystemCursor {
     private typealias SetConnectionProperty =
         @convention(c) (UInt32, UInt32, CFString, CFTypeRef) -> Int32
     private typealias CursorVisible = @convention(c) () -> Bool
+    private typealias SetCursorScale = @convention(c) (UInt32, Float) -> Int32
 
     /// One-time setup; harmless if the private symbols ever vanish — hiding
     /// then simply only works while our own app is frontmost.
@@ -42,6 +43,30 @@ enum SystemCursor {
 
     static var isVisible: Bool { visibleFunction?() ?? false }
 
+    /// The hide counter can be outraced: hovering the Dock re-shows the
+    /// cursor faster than any timer re-hides it (measured: visible 159/160
+    /// samples at the Dock vs 0/120 at screen centre — a permanent second,
+    /// head-locked cursor). Scaling the cursor to nothing sidesteps that
+    /// race entirely: scale is a window-server property that no app's shape
+    /// change resets. Restored on show(), at every launch (in case a crash
+    /// left it tiny), and by the display-restore helper.
+    private static let scaleFunction: SetCursorScale? = {
+        guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGSSetCursorScale")
+        else { return nil }
+        return unsafeBitCast(sym, to: SetCursorScale.self)
+    }()
+
+    private static let connection: UInt32? = {
+        guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGSMainConnectionID")
+        else { return nil }
+        return unsafeBitCast(sym, to: MainConnectionID.self)()
+    }()
+
+    static func setScale(_ scale: Float) {
+        guard let connection, let scaleFunction else { return }
+        _ = scaleFunction(connection, scale)
+    }
+
     /// Hide/show calls are a per-connection counter, not a flag: every hide
     /// needs a matching show, so show() drains the count.
     private(set) static var hideCount = 0
@@ -50,6 +75,7 @@ enum SystemCursor {
         guard hideCount == 0 else { return }
         _ = canHideInBackground
         CGDisplayHideCursor(CGMainDisplayID())
+        setScale(0.005)
         hideCount += 1
     }
 
@@ -67,5 +93,6 @@ enum SystemCursor {
             CGDisplayShowCursor(CGMainDisplayID())
             hideCount -= 1
         }
+        setScale(1)
     }
 }

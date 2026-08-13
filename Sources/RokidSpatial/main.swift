@@ -12,6 +12,7 @@ import RokidKit
 // fresh connection, sees the truth, and outlives the app.
 if CommandLine.arguments.contains("--restore-displays") {
     AppLog.append("helper: restoring displays")
+    SystemCursor.setScale(1)
     let displays = DisplayManager()
     displays.log = { AppLog.append("helper: " + $0) }
     displays.restore()
@@ -101,6 +102,10 @@ if CommandLine.arguments.contains("--query-sweep") {
     }
     exit(0)
 }
+
+// A crash while the cursor was scaled to nothing would leave it tiny
+// system-wide with no one to restore it; every launch puts it right.
+SystemCursor.setScale(1)
 
 let application = NSApplication.shared
 // Top-level code is not main-actor isolated here, but it does run on the main

@@ -39,13 +39,16 @@ final class SpatialController: ObservableObject {
 
     @Published var source: CaptureSource = .mirror { didSet { persist(source.rawValue, "source") } }
 
-    @Published var mode: AnchorMode = .follow {
+    // Anchored by default (user preference): the screen stays put in the
+    // room, which is also the only mode the multi-screen wall allows.
+    @Published var mode: AnchorMode = .anchored {
         didSet {
             if mode == .follow, source == .glassesOnly, sideScreens != .none {
                 mode = .anchored
                 return
             }
             screen.mode = mode
+            persist(mode.rawValue, "anchorMode")
         }
     }
     @Published var distance: Float = 2.5 { didSet { screen.distance = distance; persist(distance, "distance") } }
@@ -407,6 +410,7 @@ final class SpatialController: ObservableObject {
     init() {
         let d = UserDefaults.standard
         if let v = CaptureSource(rawValue: d.string(forKey: "source") ?? "") { source = v }
+        if let v = AnchorMode(rawValue: d.string(forKey: "anchorMode") ?? "") { mode = v }
         if let v = VirtualResolution(rawValue: d.string(forKey: "virtualResolution") ?? "") {
             virtualResolution = v
         }
