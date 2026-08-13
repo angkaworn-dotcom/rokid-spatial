@@ -120,6 +120,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// it applies in every mode and costs nothing extra.
     var eyeCare: Float = 0
 
+    /// Per-axis tracking locks (SpaceWalker's Restrict Tilt/Turn). Applied to
+    /// the pose used for anchoring and viewing; the head-down peek reads the
+    /// raw pitch first, so a pitch lock cannot break the keyboard glance.
+    var axisLocks = AxisLocks()
+
     /// The frame-duration budget a draw is judged against, matching the
     /// panel's configured refresh rate.
     var targetFPS = 120
@@ -398,6 +403,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             head = simd_slerp(previous, head, min(1, dt / steady)).normalized
         }
         steadyHead = head
+        // The peek reads pitch from the unlocked pose — locking pitch means
+        // "the screen ignores tilt", not "I can no longer glance at the
+        // keyboard".
+        let rawHead = head
+        if axisLocks.isActive { head = axisLocks.apply(head) }
         screen.update(head: head, dt: dt,
                       rotationRate: simd_length(filter.angularVelocity))
 
@@ -422,7 +432,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         // must multiply every fragment — desktop, sides, cursor alike.
         var dim: Float = 1
         if headDownPeek {
-            let forward = head.act(SIMD3<Float>(0, 0, -1))
+            let forward = rawHead.act(SIMD3<Float>(0, 0, -1))
             let pitchDown = asin(max(-1, min(1, -forward.y)))
             let start = peekAngle * .pi / 180
             dim = 1 - simd_smoothstep(start, start + 20 * .pi / 180, pitchDown)

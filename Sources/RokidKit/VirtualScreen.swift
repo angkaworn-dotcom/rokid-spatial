@@ -18,15 +18,25 @@ import simd
 public enum AnchorMode: String, CaseIterable, Sendable {
     /// The screen trails the head, with a deadzone so small movements do nothing.
     case follow
+    /// The screen glides continuously toward wherever the head points — no
+    /// deadzone, just a soft lag. SpaceWalker calls this Smooth Follow; it
+    /// reads as the screen being attached to the head by a spring.
+    case smoothFollow
     /// The screen stays fixed in the room.
     case anchored
 
     public var label: String {
         switch self {
         case .follow: return "Follow"
+        case .smoothFollow: return "Smooth"
         case .anchored: return "Anchored"
         }
     }
+
+    /// True for the modes that drag the screen around with the head — the
+    /// ones the multi-screen wall cannot use, because they would drag all
+    /// three screens along with every glance.
+    public var movesWithHead: Bool { self != .anchored }
 }
 
 public final class VirtualScreen {
@@ -81,6 +91,12 @@ public final class VirtualScreen {
     /// "fraction of the remaining gap closed per second".
     public var followSpeed: Float = 3.0 {
         didSet { followSpeed = min(max(followSpeed, 0.5), 20) }
+    }
+
+    /// Smooth-follow glide rate — fraction of the remaining gap closed per
+    /// second. Low values trail languidly; high values approach head-locked.
+    public var smoothFollowSpeed: Float = 1.2 {
+        didSet { smoothFollowSpeed = min(max(smoothFollowSpeed, 0.3), 5) }
     }
 
     /// How strongly the screen locks to the head during fast rotation, 0–1.
@@ -158,32 +174,41 @@ public final class VirtualScreen {
             ? min(1, rotationRate / fullSpeed) * motionLock
             : 0
 
-        guard mode == .follow else {
+        switch mode {
+        case .anchored:
             // Anchored still gets blur suppression, just no anchor movement.
             displayAnchor = intensity > 0.001
                 ? simd_slerp(anchor, head, intensity).normalized
                 : anchor
             return
-        }
 
-        // Angular gap between where the screen is and where we are looking.
-        let delta = (anchor.inverse * head).normalized
-        let gap = 2 * acos(min(max(abs(delta.real), -1), 1))
-        let deadzone = deadzoneDegrees * .pi / 180
+        case .smoothFollow:
+            // One rule, no deadzone: always ease toward the head. The lag is
+            // the product — enough movement to feel connected, enough delay
+            // to feel soft. Yaw drift is absorbed continuously, same as
+            // follow mode.
+            anchor = simd_slerp(anchor, head, min(1, smoothFollowSpeed * dt)).normalized
 
-        if gap > deadzone {
-            // Aim for the orientation that leaves the head exactly at the edge
-            // of the deadzone, then ease toward it. The result is a screen that
-            // hangs back while you glance around and swings over when you
-            // actually turn.
-            let targetFraction = (gap - deadzone) / gap
-            let target = simd_slerp(anchor, head, targetFraction)
-            anchor = simd_slerp(anchor, target, min(1, followSpeed * dt)).normalized
-        } else if gap > 1e-4 {
-            // Inside the deadzone, drift gently back to centred. This is what
-            // stops the screen from sitting permanently off to one side after
-            // a glance, and it quietly absorbs yaw drift too.
-            anchor = simd_slerp(anchor, head, min(1, settleSpeed * dt)).normalized
+        case .follow:
+            // Angular gap between where the screen is and where we are looking.
+            let delta = (anchor.inverse * head).normalized
+            let gap = 2 * acos(min(max(abs(delta.real), -1), 1))
+            let deadzone = deadzoneDegrees * .pi / 180
+
+            if gap > deadzone {
+                // Aim for the orientation that leaves the head exactly at the
+                // edge of the deadzone, then ease toward it. The result is a
+                // screen that hangs back while you glance around and swings
+                // over when you actually turn.
+                let targetFraction = (gap - deadzone) / gap
+                let target = simd_slerp(anchor, head, targetFraction)
+                anchor = simd_slerp(anchor, target, min(1, followSpeed * dt)).normalized
+            } else if gap > 1e-4 {
+                // Inside the deadzone, drift gently back to centred. This is
+                // what stops the screen from sitting permanently off to one
+                // side after a glance, and it quietly absorbs yaw drift too.
+                anchor = simd_slerp(anchor, head, min(1, settleSpeed * dt)).normalized
+            }
         }
 
         displayAnchor = intensity > 0.001

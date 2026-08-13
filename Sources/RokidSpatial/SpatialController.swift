@@ -43,7 +43,7 @@ final class SpatialController: ObservableObject {
     // room, which is also the only mode the multi-screen wall allows.
     @Published var mode: AnchorMode = .anchored {
         didSet {
-            if mode == .follow, source == .glassesOnly, sideScreens != .none {
+            if mode.movesWithHead, source == .glassesOnly, sideScreens != .none {
                 mode = .anchored
                 return
             }
@@ -63,7 +63,7 @@ final class SpatialController: ObservableObject {
     @Published var sideScreens: SideScreens = .none {
         didSet {
             persist(sideScreens.rawValue, "sideScreens")
-            if sideScreens != .none, mode == .follow { mode = .anchored }
+            if sideScreens != .none, mode.movesWithHead { mode = .anchored }
         }
     }
 
@@ -92,6 +92,22 @@ final class SpatialController: ObservableObject {
         }
     }
     @Published var deadzone: Float = 6 { didSet { screen.deadzoneDegrees = deadzone; persist(deadzone, "deadzone") } }
+    /// Smooth-follow glide rate — how eagerly the screen chases the head.
+    @Published var glideSpeed: Float = 1.2 { didSet { screen.smoothFollowSpeed = glideSpeed; persist(glideSpeed, "glideSpeed") } }
+    /// Per-axis tracking locks (SpaceWalker's Restrict Tilt/Turn trio).
+    /// Roll is the daily one: locked, the screen tilts with the head instead
+    /// of counter-rotating — reading sideways on a sofa stops fighting you.
+    @Published var lockPitch = false { didSet { pushAxisLocks(); persist(lockPitch, "lockPitch") } }
+    @Published var lockYaw = false { didSet { pushAxisLocks(); persist(lockYaw, "lockYaw") } }
+    @Published var lockRoll = false { didSet { pushAxisLocks(); persist(lockRoll, "lockRoll") } }
+    /// Dim the MacBook panel to black while a mirror/2nd-desktop session
+    /// runs (glasses-only always does this). Backlight only — capture is
+    /// unaffected. Restored on every exit path with the rest.
+    @Published var dimBuiltin = false { didSet { persist(dimBuiltin, "dimBuiltin"); applyBuiltinDim() } }
+    /// Learn the gyro bias automatically whenever the glasses are set down
+    /// and left still — SpaceWalker's place-flat auto-calibration, driven by
+    /// the stillness detector the filter already runs.
+    @Published var autoCalibrate = true { didSet { persist(autoCalibrate, "autoCalibrate") } }
     @Published var followSpeed: Float = 3.0 { didSet { screen.followSpeed = followSpeed; persist(followSpeed, "followSpeed") } }
     @Published var settleSpeed: Float = 0.7 { didSet { screen.settleSpeed = settleSpeed; persist(settleSpeed, "settleSpeed") } }
     @Published var ipd: Float = 0.063 { didSet { screen.ipd = ipd; persist(ipd, "ipd") } }
@@ -261,6 +277,10 @@ final class SpatialController: ObservableObject {
         case r1440x900
         case r1600x1000
         case r1920x1200
+        /// SpaceWalker's Ultra-Wide: one 21:9 desktop instead of a wall of
+        /// three. Best with the curved screen — a flat 21:9 at working
+        /// distance leaves the edges visibly further away than the centre.
+        case r2560x1080
 
         var id: String { rawValue }
 
@@ -270,11 +290,12 @@ final class SpatialController: ObservableObject {
             case .r1440x900: return 1440
             case .r1600x1000: return 1600
             case .r1920x1200: return 1920
+            case .r2560x1080: return 2560
             }
         }
 
-        var height: Int { width * 5 / 8 }
-        var label: String { "\(width)×\(height)" }
+        var height: Int { self == .r2560x1080 ? 1080 : width * 5 / 8 }
+        var label: String { self == .r2560x1080 ? "21:9" : "\(width)×\(height)" }
 
         /// Retina backing is worth the pixels once the desktop is small enough
         /// that the virtual screen renders larger than its point size.
@@ -366,6 +387,10 @@ final class SpatialController: ObservableObject {
     /// Built-in panel brightness before glasses-only mode dimmed it to zero.
     private var savedBrightness: Float?
 
+    /// Earliest time the next automatic gyro calibration may fire. Bias
+    /// moves with temperature over minutes; once per ten is plenty.
+    private var nextAutoCalibrate = Date.distantPast
+
     /// Keeps App Nap and timer coalescing away from the render pipeline for
     /// the whole session — frame pacing is the product.
     private var activityToken: NSObjectProtocol?
@@ -454,6 +479,12 @@ final class SpatialController: ObservableObject {
         load("screenGap", into: &screenGap)
         load("peekAngle", into: &peekAngle)
         load("eyeCare", into: &eyeCare)
+        load("glideSpeed", into: &glideSpeed)
+        if d.object(forKey: "lockPitch") != nil { lockPitch = d.bool(forKey: "lockPitch") }
+        if d.object(forKey: "lockYaw") != nil { lockYaw = d.bool(forKey: "lockYaw") }
+        if d.object(forKey: "lockRoll") != nil { lockRoll = d.bool(forKey: "lockRoll") }
+        if d.object(forKey: "dimBuiltin") != nil { dimBuiltin = d.bool(forKey: "dimBuiltin") }
+        if d.object(forKey: "autoCalibrate") != nil { autoCalibrate = d.bool(forKey: "autoCalibrate") }
 
         // Property observers don't fire during init, so the loaded values
         // have to be pushed into the render-side objects by hand.
@@ -467,6 +498,7 @@ final class SpatialController: ObservableObject {
         screen.settleSpeed = settleSpeed
         screen.ipd = ipd
         screen.motionLock = motionLock
+        screen.smoothFollowSpeed = glideSpeed
 
         // Sleep/wake: willSleep is delivered on the main queue before the
         // machine actually sleeps, so the teardown starts while everything
@@ -784,6 +816,7 @@ final class SpatialController: ObservableObject {
         renderer.targetFPS = frameRate
         renderer.sideGap = screenGap * .pi / 180
         self.renderer = renderer
+        pushAxisLocks()
 
         createOverlayWindow(renderer: renderer)
         startIMU()
@@ -850,6 +883,7 @@ final class SpatialController: ObservableObject {
         setStatus(String(format: "Running — %.0f×%.0f @ %d Hz",
                          size.width, size.height, frameRate))
         startRateTimer()
+        if source != .glassesOnly { applyBuiltinDim() }
 
         // Last, after everything is confirmed running: glasses-only mode's
         // screen-off, plus the cursor swap. The hardware cursor is hidden
@@ -1338,6 +1372,32 @@ final class SpatialController: ObservableObject {
         func get() -> CFRunLoop? { lock.lock(); defer { lock.unlock() }; return loop }
     }
 
+    /// Mirror the three lock toggles into the renderer's value-type copy.
+    private func pushAxisLocks() {
+        var locks = AxisLocks()
+        locks.pitch = lockPitch
+        locks.yaw = lockYaw
+        locks.roll = lockRoll
+        renderer?.axisLocks = locks
+    }
+
+    /// Live-apply the "dim MacBook screen" toggle to a running extended
+    /// session. Glasses-only manages the panel itself; this covers mirror
+    /// and 2nd-desktop, where the built-in normally stays lit.
+    private func applyBuiltinDim() {
+        guard isRunning, source != .glassesOnly,
+              let deskID = displays.deskDisplayID else { return }
+        if dimBuiltin {
+            if savedBrightness == nil {
+                savedBrightness = BuiltinBrightness.get(deskID) ?? 0.5
+            }
+            BuiltinBrightness.set(deskID, to: 0)
+        } else if let savedBrightness {
+            BuiltinBrightness.set(deskID, to: savedBrightness)
+            self.savedBrightness = nil
+        }
+    }
+
     /// Push the HUD toggle onto the live overlay layer — takes effect
     /// immediately, no session restart.
     private func applyMetalHUD() {
@@ -1544,6 +1604,20 @@ final class SpatialController: ObservableObject {
                 }()
                 if let renderer = self.renderer, self.capture.pointWidth > 0 {
                     self.pixelScale = renderer.renderedWidth / Float(self.capture.pointWidth)
+                }
+                // Glasses set down and left alone → learn the gyro bias
+                // quietly (SpaceWalker's place-flat auto-calibration). The
+                // stillness test is the filter's own — a worn head never
+                // passes it for four straight seconds. No recentre and no
+                // status noise: the user is not wearing the glasses, and
+                // aiming the screen at the desk would be worse than nothing.
+                if self.autoCalibrate, self.calibrationEndsAt == nil,
+                   !self.filter.isCalibrating,
+                   self.filter.stationaryTime > 4,
+                   Date() >= self.nextAutoCalibrate {
+                    self.nextAutoCalibrate = Date().addingTimeInterval(600)
+                    Self.appendLog("auto-calibrate: glasses still for 4 s — learning gyro bias")
+                    self.filter.beginCalibration(seconds: 4)
                 }
                 self.healthCheck()
             }
@@ -1759,7 +1833,11 @@ final class SpatialController: ObservableObject {
     }
 
     func toggleMode() {
-        mode = (mode == .follow) ? .anchored : .follow
+        mode = switch mode {
+        case .follow: .smoothFollow
+        case .smoothFollow: .anchored
+        case .anchored: .follow
+        }
         if mode == .anchored { screen.recenter(head: filter.relativeOrientation) }
     }
 
