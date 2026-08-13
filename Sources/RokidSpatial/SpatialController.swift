@@ -152,6 +152,19 @@ final class SpatialController: ObservableObject {
     /// Catmull-Rom sampling instead of bilinear — crisper text under
     /// magnification. Live-switchable so the difference can be judged by eye.
     @Published var crispSampling = false { didSet { renderer?.crisp = crispSampling; persist(crispSampling, "crispSampling") } }
+    /// sRGB-correct filtering: decode to linear before interpolation, encode
+    /// on write. Correct blends; text fringes lose their artificial darkness,
+    /// which reads cleaner to some eyes and softer to others — hence a live
+    /// toggle rather than a decision made here.
+    @Published var linearLight = false {
+        didSet {
+            persist(linearLight, "linearLight")
+            renderer?.linearLight = linearLight
+            metalView?.colorPixelFormat = linearLight ? .bgra8Unorm_srgb : .bgra8Unorm
+            // The sprite must be reloaded in the matching colour space.
+            cursorSpriteImage = nil
+        }
+    }
     /// Fade the render to black as the head pitches down (35-55°), so a
     /// glance at the keyboard sees the real desk through the optics.
     @Published var headDownPeek = false { didSet { renderer?.headDownPeek = headDownPeek; persist(headDownPeek, "headDownPeek") } }
@@ -520,6 +533,7 @@ final class SpatialController: ObservableObject {
         load("glideSpeed", into: &glideSpeed)
         load("sharpen", into: &sharpen)
         if d.object(forKey: "crispSampling") != nil { crispSampling = d.bool(forKey: "crispSampling") }
+        if d.object(forKey: "linearLight") != nil { linearLight = d.bool(forKey: "linearLight") }
         if d.object(forKey: "lockPitch") != nil { lockPitch = d.bool(forKey: "lockPitch") }
         if d.object(forKey: "lockYaw") != nil { lockYaw = d.bool(forKey: "lockYaw") }
         if d.object(forKey: "lockRoll") != nil { lockRoll = d.bool(forKey: "lockRoll") }
@@ -858,6 +872,7 @@ final class SpatialController: ObservableObject {
         renderer.antiMoire = antiMoire
         renderer.sharpen = sharpen
         renderer.crisp = crispSampling
+        renderer.linearLight = linearLight
         renderer.headDownPeek = headDownPeek
         renderer.peekAngle = peekAngle
         renderer.eyeCare = eyeCare
@@ -1545,9 +1560,11 @@ final class SpatialController: ObservableObject {
         else { return }
 
         let loader = MTKTextureLoader(device: renderer.device)
+        // The sprite loads in whichever colour space the framebuffer uses,
+        // so the round trip through the pipeline leaves its colours alone.
         guard let texture = try? loader.newTexture(
             cgImage: cgImage,
-            options: [.SRGB: false, .textureUsage: MTLTextureUsage.shaderRead.rawValue]
+            options: [.SRGB: linearLight, .textureUsage: MTLTextureUsage.shaderRead.rawValue]
         ) else { return }
         cursorSpriteImage = image
 
@@ -1580,7 +1597,7 @@ final class SpatialController: ObservableObject {
 
         let view = MTKView(frame: CGRect(origin: .zero, size: bounds.size),
                            device: renderer.device)
-        view.colorPixelFormat = .bgra8Unorm
+        view.colorPixelFormat = linearLight ? .bgra8Unorm_srgb : .bgra8Unorm
         view.framebufferOnly = true
         view.preferredFramesPerSecond = frameRate
         view.enableSetNeedsDisplay = false

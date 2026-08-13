@@ -175,10 +175,14 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     let device: MTLDevice
     private let commandQueue: MTLCommandQueue
-    private let pipeline: MTLRenderPipelineState
-    private let smoothPipeline: MTLRenderPipelineState
-    private let crispPipeline: MTLRenderPipelineState
-    private let cursorPipeline: MTLRenderPipelineState
+    // Two of each pipeline: index 0 renders into a plain bgra8Unorm
+    // framebuffer, index 1 into the sRGB one linear-light mode uses. The
+    // set is picked per frame from the drawable's *actual* format, so a
+    // live toggle can never pair a pipeline with a mismatched attachment.
+    private let pipelines: [MTLRenderPipelineState]
+    private let smoothPipelines: [MTLRenderPipelineState]
+    private let crispPipelines: [MTLRenderPipelineState]
+    private let cursorPipelines: [MTLRenderPipelineState]
 
     /// Selects the anti-moiré fragment path; flippable live from settings.
     var antiMoire = false
@@ -191,6 +195,17 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// Post-sample sharpening strength, 0 (off) to 1. Applied in every
     /// desktop fragment path, never to the cursor sprite.
     var sharpen: Float = 0
+
+    /// Linear-light filtering: decode sRGB *before* bilinear interpolation
+    /// (an sRGB-view of the capture), filter and sharpen in linear, and let
+    /// the sRGB drawable re-encode on write. Gamma-space filtering — the
+    /// default everywhere, including here until now — darkens the fringe
+    /// pixels of text; linear is the mathematically right blend. Whether
+    /// "right" also reads *better* is for the eyes: correct edges are
+    /// fractionally softer-looking than gamma's artificially dark ones.
+    /// This flag drives the capture-texture view format; the framebuffer
+    /// side follows the view's colorPixelFormat, set by the controller.
+    var linearLight = false
 
     /// CPU-side mirror of the shader's FragParams.
     private struct FragParams {
@@ -395,28 +410,33 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         do {
             let library = try device.makeLibrary(source: shaderSource, options: nil)
-            let descriptor = MTLRenderPipelineDescriptor()
-            descriptor.vertexFunction = library.makeFunction(name: "vertexMain")
-            descriptor.fragmentFunction = library.makeFunction(name: "fragmentMain")
-            descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
-            pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+            let formats: [MTLPixelFormat] = [.bgra8Unorm, .bgra8Unorm_srgb]
 
-            descriptor.fragmentFunction = library.makeFunction(name: "fragmentSmooth")
-            smoothPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+            func makePair(_ fragment: String,
+                          blended: Bool = false) throws -> [MTLRenderPipelineState] {
+                try formats.map { format in
+                    let descriptor = MTLRenderPipelineDescriptor()
+                    descriptor.vertexFunction = library.makeFunction(name: "vertexMain")
+                    descriptor.fragmentFunction = library.makeFunction(name: fragment)
+                    descriptor.colorAttachments[0].pixelFormat = format
+                    if blended {
+                        // CGImage-sourced textures are premultiplied, hence .one.
+                        let blend = descriptor.colorAttachments[0]!
+                        blend.isBlendingEnabled = true
+                        blend.sourceRGBBlendFactor = .one
+                        blend.sourceAlphaBlendFactor = .one
+                        blend.destinationRGBBlendFactor = .oneMinusSourceAlpha
+                        blend.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+                    }
+                    return try device.makeRenderPipelineState(descriptor: descriptor)
+                }
+            }
 
-            descriptor.fragmentFunction = library.makeFunction(name: "fragmentCrisp")
-            crispPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
-
+            pipelines = try makePair("fragmentMain")
+            smoothPipelines = try makePair("fragmentSmooth")
+            crispPipelines = try makePair("fragmentCrisp")
             // Same vertex path, alpha-blended fragment for the cursor sprite.
-            // CGImage-sourced textures are premultiplied, hence .one.
-            descriptor.fragmentFunction = library.makeFunction(name: "fragmentCursor")
-            let blend = descriptor.colorAttachments[0]!
-            blend.isBlendingEnabled = true
-            blend.sourceRGBBlendFactor = .one
-            blend.sourceAlphaBlendFactor = .one
-            blend.destinationRGBBlendFactor = .oneMinusSourceAlpha
-            blend.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-            cursorPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+            cursorPipelines = try makePair("fragmentCursor", blended: true)
         } catch {
             NSLog("Renderer: shader compilation failed — \(error)")
             return nil
@@ -563,12 +583,23 @@ final class Renderer: NSObject, MTKViewDelegate {
             let start = peekAngle * .pi / 180
             dim = 1 - simd_smoothstep(start, start + 20 * .pi / 180, pitchDown)
         }
+        // Pipeline set from the drawable's actual format, never the toggle:
+        // the toggle flips on the main thread mid-flight, and a pipeline
+        // built for the other format is a validation failure.
+        let linearFB = descriptor.colorAttachments[0].texture?.pixelFormat == .bgra8Unorm_srgb
+        let fb = linearFB ? 1 : 0
+
         // tint rgb = per-channel gains (eye-care warmth), a = overall dim
-        // (peek); misc.x = sharpen strength.
-        var params = FragParams(
-            tint: SIMD4<Float>(1, 1 - 0.18 * eyeCare, 1 - 0.38 * eyeCare, dim),
-            misc: SIMD4<Float>(sharpen, 0, 0, 0)
-        )
+        // (peek); misc.x = sharpen strength. The warmth and fade curves were
+        // tuned by eye against gamma-encoded values; in linear light the
+        // same multipliers read much stronger, so raise them to 2.2 to keep
+        // the approved feel identical in both modes.
+        var tint = SIMD4<Float>(1, 1 - 0.18 * eyeCare, 1 - 0.38 * eyeCare, dim)
+        if linearFB {
+            tint = SIMD4(pow(tint.x, 2.2), pow(tint.y, 2.2),
+                         pow(tint.z, 2.2), pow(tint.w, 2.2))
+        }
+        var params = FragParams(tint: tint, misc: SIMD4<Float>(sharpen, 0, 0, 0))
         encoder.setFragmentBytes(&params, length: MemoryLayout<FragParams>.size, index: 0)
 
         if let texture {
@@ -693,7 +724,8 @@ final class Renderer: NSObject, MTKViewDelegate {
                                        index: 1)
 
                 encoder.setRenderPipelineState(
-                    antiMoire ? smoothPipeline : (crisp ? crispPipeline : pipeline))
+                    antiMoire ? smoothPipelines[fb]
+                              : (crisp ? crispPipelines[fb] : pipelines[fb]))
                 encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
                 encoder.setFragmentTexture(texture, index: 0)
                 encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0,
@@ -707,7 +739,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 }
 
                 if let cursorVertices, let sprite {
-                    encoder.setRenderPipelineState(cursorPipeline)
+                    encoder.setRenderPipelineState(cursorPipelines[fb])
                     encoder.setVertexBytes(cursorVertices,
                                            length: MemoryLayout<SIMD4<Float>>.stride * cursorVertices.count,
                                            index: 0)
@@ -743,7 +775,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         var wrapped: CVMetalTexture?
         let status = CVMetalTextureCacheCreateTextureFromImage(
             kCFAllocatorDefault, textureCache, frame, nil,
-            .bgra8Unorm, width, height, 0, &wrapped
+            // The sRGB view is what makes linear-light real: texels decode
+            // to linear *before* the bilinear weights are applied.
+            linearLight ? .bgra8Unorm_srgb : .bgra8Unorm, width, height, 0, &wrapped
         )
         guard status == kCVReturnSuccess,
               let wrapped,
@@ -766,7 +800,8 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         var wrapped: CVMetalTexture?
         let status = CVMetalTextureCacheCreateTextureFromImage(
-            kCFAllocatorDefault, textureCache, frame, nil, .bgra8Unorm,
+            kCFAllocatorDefault, textureCache, frame, nil,
+            linearLight ? .bgra8Unorm_srgb : .bgra8Unorm,
             CVPixelBufferGetWidth(frame), CVPixelBufferGetHeight(frame), 0, &wrapped
         )
         guard status == kCVReturnSuccess,

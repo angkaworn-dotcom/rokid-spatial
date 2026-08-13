@@ -329,6 +329,14 @@ struct SettingsView: View {
                    range: 0...1, unit: "", format: "%.2f")
             Toggle("Crisp sampling (Catmull-Rom)", isOn: $controller.crispSampling)
                 .font(.caption)
+            Toggle("Linear-light filtering", isOn: $controller.linearLight)
+                .font(.caption)
+            if controller.linearLight {
+                Text("Colour-correct blending: text edges lose their artificial dark fringe. Cleaner to some eyes, softer to others — judge against Sharpen.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Toggle("Anti-moiré resample", isOn: $controller.antiMoire)
                 .font(.caption)
             if controller.antiMoire && controller.crispSampling {
