@@ -414,6 +414,28 @@ final class DisplayManager {
         Thread.sleep(forTimeInterval: 0.5)
     }
 
+    /// Stacked layout: put `display` directly above the anchor, left-aligned,
+    /// so the pointer leaves through the top edge — matching where the eye
+    /// sees the screen hang.
+    func positionAbove(_ display: CGDirectDisplayID, of anchor: CGDirectDisplayID) {
+        let height = Int32(CGDisplayPixelsHigh(display))
+        try? configure { config in
+            CGConfigureDisplayOrigin(config, display, 0, -height)
+        }
+        Thread.sleep(forTimeInterval: 0.5)
+    }
+
+    /// Mirror image of `positionAbove`. The Dock dislikes a display whose
+    /// bottom edge adjoins another (see fixWallLayout) — harmless here,
+    /// because glasses-only sessions run with the Dock auto-hidden anyway.
+    func positionBelow(_ display: CGDirectDisplayID, of anchor: CGDirectDisplayID) {
+        let height = Int32(CGDisplayPixelsHigh(anchor))
+        try? configure { config in
+            CGConfigureDisplayOrigin(config, display, 0, height)
+        }
+        Thread.sleep(forTimeInterval: 0.5)
+    }
+
     /// Restore for glasses-only mode: panel back to 2D, mirroring left exactly
     /// as macOS likes it. With no overlay and no second desktop there is
     /// nothing left that can trap the user, so there is nothing to enforce
@@ -558,28 +580,37 @@ final class DisplayManager {
         return owners
     }
 
-    /// macOS sometimes reinstates mirroring on its own after a reconfiguration.
-    /// Push it back once before giving up — often it is a transient settling
-    /// step rather than a permanent decision.
-    @discardableResult
+    /// Where a side screen hangs relative to the wall's main display —
+    /// left/right for the wide and portrait layouts, above/below for the
+    /// stacked one. The stacked placements are only used by plain
+    /// glasses-only sessions, whose parked list is empty, so they can never
+    /// collide with the parked displays stacked above the wall.
+    enum SidePlacement {
+        case right, left, above, below
+    }
+
     /// The wall layout: `mainID` at the origin (menu bar and centre of the
-    /// wall), right side flush against its right edge, left side flush
-    /// against its left, and any `parked` displays stacked directly below —
-    /// reachable, but the pointer has to be pushed there deliberately.
-    /// macOS's remembered arrangements scatter these on re-apply; the
-    /// watchdog checks cheaply every second and fixes in one batched
-    /// reconfiguration. Glasses-only passes the glasses as main; SBS-90
-    /// passes the working virtual desktop as main and parks the glasses
-    /// and the built-in below it.
+    /// wall), the sides flush against the edge their placement names, and
+    /// any `parked` displays stacked directly above — reachable, but the
+    /// pointer has to be pushed there deliberately. macOS's remembered
+    /// arrangements scatter these on re-apply; the watchdog checks cheaply
+    /// every second and fixes in one batched reconfiguration. Glasses-only
+    /// passes the glasses as main; SBS-90 passes the working virtual
+    /// desktop as main and parks the glasses and the built-in.
     func wallLayoutIsBroken(main mainID: CGDirectDisplayID,
-                            sides: [(id: CGDirectDisplayID, isRight: Bool)],
+                            sides: [(id: CGDirectDisplayID, placement: SidePlacement)],
                             parked: [CGDirectDisplayID] = []) -> Bool {
         let main = CGDisplayBounds(mainID)
         if main.origin != .zero { return true }
         for side in sides {
             let bounds = CGDisplayBounds(side.id)
-            let expectedX = side.isRight ? main.maxX : main.minX - bounds.width
-            if bounds.origin.x != expectedX || bounds.origin.y != main.minY { return true }
+            let expected: CGPoint = switch side.placement {
+            case .right: CGPoint(x: main.maxX, y: main.minY)
+            case .left: CGPoint(x: main.minX - bounds.width, y: main.minY)
+            case .above: CGPoint(x: main.minX, y: main.minY - bounds.height)
+            case .below: CGPoint(x: main.minX, y: main.maxY)
+            }
+            if bounds.origin != expected { return true }
         }
         var y = main.minY
         for id in parked {
@@ -591,16 +622,23 @@ final class DisplayManager {
     }
 
     func fixWallLayout(main mainID: CGDirectDisplayID,
-                       sides: [(id: CGDirectDisplayID, isRight: Bool)],
+                       sides: [(id: CGDirectDisplayID, placement: SidePlacement)],
                        parked: [CGDirectDisplayID] = []) {
         let mainWidth = Int32(CGDisplayPixelsWide(mainID))
+        let mainHeight = Int32(CGDisplayPixelsHigh(mainID))
         try? configure { config in
             var err = CGConfigureDisplayOrigin(config, mainID, 0, 0)
             guard err == .success else { return err }
             for side in sides {
                 let width = Int32(CGDisplayPixelsWide(side.id))
-                err = CGConfigureDisplayOrigin(config, side.id,
-                                               side.isRight ? mainWidth : -width, 0)
+                let height = Int32(CGDisplayPixelsHigh(side.id))
+                let origin: (x: Int32, y: Int32) = switch side.placement {
+                case .right: (mainWidth, 0)
+                case .left: (-width, 0)
+                case .above: (0, -height)
+                case .below: (0, mainHeight)
+                }
+                err = CGConfigureDisplayOrigin(config, side.id, origin.x, origin.y)
                 guard err == .success else { return err }
             }
             // Parked displays stack ABOVE the wall, not below: a

@@ -202,6 +202,30 @@ struct SettingsView: View {
                     .disabled(controller.isRunning)
                 }
                 if controller.sideScreens != .none {
+                    labelled("Layout") {
+                        Picker("", selection: $controller.sideLayout) {
+                            ForEach(SpatialController.SideLayout.allCases) { layout in
+                                Text(layout.label).tag(layout)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        // The SBS variants' wall parks displays above it,
+                        // exactly where Stacked would hang a screen.
+                        .disabled(controller.isRunning || controller.sbsMode != .off)
+                    }
+                    if controller.sideLayout == .stacked {
+                        Text("\"Right\" hangs above the main screen, \"L + R\" adds one below. The pointer leaves through the top and bottom edges.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if controller.sideLayout == .portrait {
+                        Text("Side desktops rotate 90° — tall panels for chat, logs, or reading, beside the landscape centre.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     slider("Gap", value: $controller.screenGap,
                            range: 0...10, unit: "°", format: "%.0f")
                 }
@@ -289,6 +313,15 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 10) {
             Toggle("Anti-moiré resample", isOn: $controller.antiMoire)
                 .font(.caption)
+
+            Toggle("Adaptive VSync", isOn: $controller.adaptiveVSync)
+                .font(.caption)
+            if controller.adaptiveVSync {
+                Text("Late frames show immediately (may tear) instead of waiting a whole refresh (always stutters). Judge by eye against the slow-frame counter.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Toggle("Performance HUD", isOn: $controller.metalHUD)
                 .font(.caption)

@@ -91,6 +91,35 @@ final class SpatialController: ObservableObject {
             }
         }
     }
+
+    /// How the side screens hang (SpaceWalker's layout picker: Displays Side
+    /// by Side / Portrait-Landscape-Portrait / 3 Stacked Displays). Portrait
+    /// creates the side desktops rotated 90°; Stacked hangs them above and
+    /// below. Plain glasses-only sessions only — the standalone variants'
+    /// wall keeps the parked displays above it, where Stacked would collide.
+    enum SideLayout: String, CaseIterable, Identifiable {
+        case wide
+        case portrait
+        case stacked
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .wide: return "Wide"
+            case .portrait: return "Portrait"
+            case .stacked: return "Stacked"
+            }
+        }
+    }
+
+    @Published var sideLayout: SideLayout = .wide { didSet { persist(sideLayout.rawValue, "sideLayout") } }
+
+    /// SpaceWalker's Adaptive VSync, decoded from its binary: the overlay
+    /// layer's `displaySyncEnabled` flipped off, so a frame that misses the
+    /// panel's deadline presents immediately (a possible tear) instead of
+    /// waiting a whole extra interval (a certain stutter). Live-flippable.
+    @Published var adaptiveVSync = false { didSet { persist(adaptiveVSync, "adaptiveVSync"); applyVSync() } }
     @Published var deadzone: Float = 6 { didSet { screen.deadzoneDegrees = deadzone; persist(deadzone, "deadzone") } }
     /// Smooth-follow glide rate — how eagerly the screen chases the head.
     @Published var glideSpeed: Float = 1.2 { didSet { screen.smoothFollowSpeed = glideSpeed; persist(glideSpeed, "glideSpeed") } }
@@ -462,6 +491,10 @@ final class SpatialController: ObservableObject {
         if let v = SideScreens(rawValue: d.string(forKey: "sideScreens") ?? "") {
             sideScreens = v
         }
+        if let v = SideLayout(rawValue: d.string(forKey: "sideLayout") ?? "") {
+            sideLayout = v
+        }
+        if d.object(forKey: "adaptiveVSync") != nil { adaptiveVSync = d.bool(forKey: "adaptiveVSync") }
 
         func load(_ key: String, into value: inout Float) {
             if d.object(forKey: key) != nil { value = d.float(forKey: key) }
@@ -775,13 +808,19 @@ final class SpatialController: ObservableObject {
             // plain glasses-only both use the glasses' real desktop size.)
             let effective = stereoActive ? sbsMode.desktopSize
                                          : displays.glassesDesktopSize
+            // Portrait layout rotates the side desktops 90° — the P-L-P
+            // wall. Plain sessions only; the standalone variants match the
+            // panel exactly.
+            let sideSize = (!standaloneActive && sideLayout == .portrait)
+                ? (width: effective.height, height: effective.width)
+                : effective
             for index in sideScreens.indices {
                 do {
                     // Match the panel's rate: a 60 Hz virtual display in the
                     // set drags the whole composition back down to ~60-90
                     // (measured; 120 came back the moment both sides went).
                     try sideDisplays[index].create(
-                        width: effective.width, height: effective.height,
+                        width: sideSize.width, height: sideSize.height,
                         hiDPI: false, refreshRate: Double(frameRate),
                         identity: UInt32(2 + index)
                     )
@@ -815,6 +854,7 @@ final class SpatialController: ObservableObject {
         renderer.eyeCare = eyeCare
         renderer.targetFPS = frameRate
         renderer.sideGap = screenGap * .pi / 180
+        renderer.sideStacked = !standaloneActive && sideLayout == .stacked
         self.renderer = renderer
         pushAxisLocks()
 
@@ -910,9 +950,9 @@ final class SpatialController: ObservableObject {
                 // sides flush left/right, the rest parked below. And no
                 // mirror touching the glasses or sides — that would
                 // harmonize the flip rate straight back down to 60.
-                let sides = sideScreens.indices.compactMap { index -> (id: CGDirectDisplayID, isRight: Bool)? in
+                let sides = sideScreens.indices.compactMap { index -> (id: CGDirectDisplayID, placement: DisplayManager.SidePlacement)? in
                     guard let id = sideDisplays[index].displayID else { return nil }
-                    return (id, index == 0)
+                    return (id, sidePlacement(index))
                 }
                 let parked = standaloneParked(excluding: captureID)
                 let mergeBuiltin = sbsMode == .sbs60
@@ -936,18 +976,19 @@ final class SpatialController: ObservableObject {
                     }
                 }.value
             } else {
-                // Side screens, for those whose displays came up: right sits
-                // to the right of the main desktop and left to the left, so
-                // the pointer leaves on the side the eye sees the screen.
-                // Position everything first, then re-assert the main
-                // desktop's size — every reconfiguration invites macOS to
-                // revert it.
+                // Side screens, for those whose displays came up, placed so
+                // the pointer leaves the main desktop on the edge where the
+                // eye sees the screen — beside it for Wide/Portrait, through
+                // the top/bottom for Stacked. Position everything first,
+                // then re-assert the main desktop's size — every
+                // reconfiguration invites macOS to revert it.
                 for index in sideScreens.indices {
                     guard let sideID = sideDisplays[index].displayID else { continue }
-                    if index == 0 {
-                        displays.positionToRight(sideID, of: captureID)
-                    } else {
-                        displays.positionToLeft(sideID, of: captureID)
+                    switch sidePlacement(index) {
+                    case .right: displays.positionToRight(sideID, of: captureID)
+                    case .left: displays.positionToLeft(sideID, of: captureID)
+                    case .above: displays.positionAbove(sideID, of: captureID)
+                    case .below: displays.positionBelow(sideID, of: captureID)
                     }
                 }
                 if !sideScreens.indices.isEmpty {
@@ -1372,6 +1413,24 @@ final class SpatialController: ObservableObject {
         func get() -> CFRunLoop? { lock.lock(); defer { lock.unlock() }; return loop }
     }
 
+    /// Where side screen `index` (0 = "Right", 1 = the second one) hangs.
+    /// Stacked maps them to above/below; the standalone variants' wall is
+    /// always horizontal, because the parked displays own the space above.
+    private func sidePlacement(_ index: Int) -> DisplayManager.SidePlacement {
+        if !standaloneActive, sideLayout == .stacked {
+            return index == 0 ? .above : .below
+        }
+        return index == 0 ? .right : .left
+    }
+
+    /// Push the Adaptive VSync toggle onto the live overlay layer.
+    private func applyVSync() {
+        (metalView?.layer as? CAMetalLayer)?.displaySyncEnabled = !adaptiveVSync
+        if isRunning {
+            Self.appendLog("vsync: displaySyncEnabled = \(!adaptiveVSync)")
+        }
+    }
+
     /// Mirror the three lock toggles into the renderer's value-type copy.
     private func pushAxisLocks() {
         var locks = AxisLocks()
@@ -1532,6 +1591,7 @@ final class SpatialController: ObservableObject {
         // backing layer may not exist yet and the HUD silently never
         // appears (seen live).
         applyMetalHUD()
+        applyVSync()
         // Two classes of thing try to draw on top of the overlay, and they
         // need different weapons. The cursor is a hardware plane composited
         // above every window — no level beats it; it is dealt with by hiding
@@ -1698,9 +1758,9 @@ final class SpatialController: ObservableObject {
             // bounds were captured at attach time. In SBS the wall's main is
             // the working desktop, and the glasses + built-in park below it.
             if source == .glassesOnly, !layoutFixInFlight {
-                let sides = sideScreens.indices.compactMap { index -> (id: CGDirectDisplayID, isRight: Bool)? in
+                let sides = sideScreens.indices.compactMap { index -> (id: CGDirectDisplayID, placement: DisplayManager.SidePlacement)? in
                     guard let id = sideDisplays[index].displayID else { return nil }
-                    return (id, index == 0)
+                    return (id, sidePlacement(index))
                 }
                 let mainID = stereoActive ? virtualDisplay.displayID : glassesID
                 let parked = standaloneActive

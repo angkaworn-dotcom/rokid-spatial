@@ -192,6 +192,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// Angular gap between neighbouring screens, radians. Zero butts the
     /// screens together into one long wall — best combined with curvature.
     var sideGap: Float = 0.05
+    /// Stacked layout (SpaceWalker's "3 Stacked Displays"): the sides hang
+    /// above (index 0) and below (index 1) the main screen instead of
+    /// beside it — the swing becomes elevation about X rather than azimuth
+    /// about Y.
+    var sideStacked = false
 
     private let filter: OrientationFilter
     private let screen: VirtualScreen
@@ -356,19 +361,35 @@ final class Renderer: NSObject, MTKViewDelegate {
         return SIMD3(point.x * c + point.z * s, point.y, -point.x * s + point.z * c)
     }
 
+    /// Rotate `point` about the anchor's horizontal axis — how a stacked
+    /// side screen swings up or down. Positive lifts the point.
+    private static func rotateX(_ point: SIMD3<Float>, _ angle: Float) -> SIMD3<Float> {
+        let c = cos(angle), s = sin(angle)
+        return SIMD3(point.x, point.y * c - point.z * s, point.y * s + point.z * c)
+    }
+
+    /// Side-screen swing: azimuth about Y for the beside layouts, elevation
+    /// about X for the stacked one. Exactly one is nonzero per side.
+    private static func swing(_ point: SIMD3<Float>,
+                              azimuth: Float, elevation: Float) -> SIMD3<Float> {
+        if elevation != 0 { return rotateX(point, elevation) }
+        if azimuth != 0 { return rotateY(point, azimuth) }
+        return point
+    }
+
     /// Fill a mesh buffer with the screen surface, optionally swung by
-    /// `azimuth` radians about the vertical axis.
-    private func fillMesh(_ buffer: MTLBuffer, aspect: Float, azimuth: Float) {
+    /// `azimuth` radians about the vertical axis or `elevation` about the
+    /// horizontal one.
+    private func fillMesh(_ buffer: MTLBuffer, aspect: Float,
+                          azimuth: Float, elevation: Float = 0) {
         let mesh = buffer.contents().bindMemory(
             to: SIMD4<Float>.self, capacity: Self.meshVertexCount * 2)
         for column in 0...Self.meshColumns {
             let u = Float(column) / Float(Self.meshColumns)
-            var bottom = screen.surfacePoint(u: u, v: 1, aspect: aspect)
-            var top = screen.surfacePoint(u: u, v: 0, aspect: aspect)
-            if azimuth != 0 {
-                bottom = Self.rotateY(bottom, azimuth)
-                top = Self.rotateY(top, azimuth)
-            }
+            let bottom = Self.swing(screen.surfacePoint(u: u, v: 1, aspect: aspect),
+                                    azimuth: azimuth, elevation: elevation)
+            let top = Self.swing(screen.surfacePoint(u: u, v: 0, aspect: aspect),
+                                 azimuth: azimuth, elevation: elevation)
             let base = column * 4
             mesh[base + 0] = SIMD4(bottom.x, bottom.y, bottom.z, 1)
             mesh[base + 1] = SIMD4(u, 1, 0, 0)
@@ -382,6 +403,13 @@ final class Renderer: NSObject, MTKViewDelegate {
     private func sideAzimuthMagnitude(mainAspect: Float, sideAspect: Float) -> Float {
         let mainHalf = screen.size(aspect: mainAspect).x / (2 * screen.distance)
         let sideHalf = screen.size(aspect: sideAspect).x / (2 * screen.distance)
+        return mainHalf + sideHalf + sideGap
+    }
+
+    /// Stacked counterpart: the vertical swing between screen centres.
+    private func sideElevationMagnitude(mainAspect: Float, sideAspect: Float) -> Float {
+        let mainHalf = screen.size(aspect: mainAspect).y / (2 * screen.distance)
+        let sideHalf = screen.size(aspect: sideAspect).y / (2 * screen.distance)
         return mainHalf + sideHalf + sideGap
     }
 
@@ -457,20 +485,36 @@ final class Renderer: NSObject, MTKViewDelegate {
             // curved) surface, positions in the anchor's local frame.
             fillMesh(vertexBuffer, aspect: contentAspect, azimuth: 0)
 
-            // Prepare whichever side screens are live this frame. Right hangs
-            // at a negative azimuth, left at a positive one.
-            var sideRender: [(index: Int, texture: MTLTexture, aspect: Float, azimuth: Float)] = []
+            // Prepare whichever side screens are live this frame. Beside:
+            // right hangs at a negative azimuth, left at a positive one.
+            // Stacked: index 0 above (positive elevation), index 1 below.
+            var sideRender: [(index: Int, texture: MTLTexture, aspect: Float,
+                              azimuth: Float, elevation: Float)] = []
             for index in 0..<sideActive.count where sideActive[index] {
                 guard let sideTexture = prepareSideTexture(index) else { continue }
                 let aspect = Float(sideTexture.width) / Float(sideTexture.height)
-                let magnitude = sideAzimuthMagnitude(mainAspect: contentAspect, sideAspect: aspect)
-                let azimuth = index == 0 ? -magnitude : magnitude
-                fillMesh(sideVertexBuffers[index], aspect: aspect, azimuth: azimuth)
-                sideRender.append((index, sideTexture, aspect, azimuth))
+                var azimuth: Float = 0
+                var elevation: Float = 0
+                if sideStacked {
+                    let magnitude = sideElevationMagnitude(mainAspect: contentAspect,
+                                                           sideAspect: aspect)
+                    elevation = index == 0 ? magnitude : -magnitude
+                } else {
+                    let magnitude = sideAzimuthMagnitude(mainAspect: contentAspect,
+                                                         sideAspect: aspect)
+                    azimuth = index == 0 ? -magnitude : magnitude
+                }
+                fillMesh(sideVertexBuffers[index], aspect: aspect,
+                         azimuth: azimuth, elevation: elevation)
+                sideRender.append((index, sideTexture, aspect, azimuth, elevation))
             }
             cursorLock.lock()
+            // Stacked sides sit at no yaw offset, so the shake-warp's
+            // "which screen is the head aimed at" test stays main-only there.
             lastAzimuths = [nil, nil]
-            for side in sideRender { lastAzimuths[side.index] = side.azimuth }
+            if !sideStacked {
+                for side in sideRender { lastAzimuths[side.index] = side.azimuth }
+            }
             cursorLock.unlock()
 
             // Convert the quoted diagonal FOV into the vertical one Metal wants.
@@ -520,7 +564,10 @@ final class Renderer: NSObject, MTKViewDelegate {
                         (u1, v0, SIMD2<Float>(1, 0)),
                     ].flatMap { (u, v, uv) -> [SIMD4<Float>] in
                         var p = screen.surfacePoint(u: u, v: v, aspect: aspect)
-                        if let side { p = Self.rotateY(p, side.azimuth) }
+                        if let side {
+                            p = Self.swing(p, azimuth: side.azimuth,
+                                           elevation: side.elevation)
+                        }
                         p *= 0.995
                         return [SIMD4(p.x, p.y, p.z, 1), SIMD4(uv.x, uv.y, 0, 0)]
                     }
