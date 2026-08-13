@@ -329,14 +329,10 @@ struct SettingsView: View {
                    range: 0...1, unit: "", format: "%.2f")
             Toggle("Crisp sampling (Catmull-Rom)", isOn: $controller.crispSampling)
                 .font(.caption)
-            Toggle("Temporal supersample", isOn: $controller.temporalSS)
-                .font(.caption)
-            if controller.temporalSS {
-                Text("Research toggle. Verdict on this panel at 1:1: slightly softer than single-frame, even with Catmull-Rom history — kept for future minified-mode experiments.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            // Temporal supersampling has no toggle here — rejected by eye
+            // at 1:1 (slightly softer than single-frame, twice). The engine
+            // stays for mirror-mode research:
+            //   defaults write com.rokidspatial.app temporalSS -bool true
             Toggle("Linear-light filtering", isOn: $controller.linearLight)
                 .font(.caption)
             if controller.linearLight {
