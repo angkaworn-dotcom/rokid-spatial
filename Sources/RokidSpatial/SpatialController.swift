@@ -310,6 +310,14 @@ final class SpatialController: ObservableObject {
     /// captured once at session start for the shape updates that follow.
     private var cursorMainBounds = CGRect.zero
     private var cursorSideBounds: [CGRect?] = [nil, nil]
+    /// Shake-to-warp state (idea from SpaceWalker, upgraded: we know where
+    /// the head is aimed, so the cursor lands on the screen being looked
+    /// at). Trail of recent pointer x positions from the cursor timer.
+    private var mouseTrail: [(t: TimeInterval, x: CGFloat)] = []
+    private var lastShakeWarp = Date.distantPast
+    /// Consecutive ticks the pointer has sat on a desktop the user cannot
+    /// see — SpaceWalker's "safe area" reset, for our parked dark displays.
+    private var hiddenCursorTicks = 0
 
     // Health watchdog. The overlay is opaque, full-screen and always on top,
     // so anything that leaves it up while the desktop underneath is unusable
@@ -941,6 +949,7 @@ final class SpatialController: ObservableObject {
                 Task { @MainActor [weak self, weak renderer] in
                     guard let self, let renderer else { return }
                     self.updateCursorSprite(renderer: renderer)
+                    self.cursorShakeAndRescueTick(renderer: renderer)
                 }
             }
         }
@@ -1323,6 +1332,62 @@ final class SpatialController: ObservableObject {
         guard let layer = metalView?.layer as? CAMetalLayer else { return }
         layer.developerHUDProperties = metalHUD ? ["mode": "default"] : nil
         if metalHUD { Self.appendLog("Metal HUD enabled on the overlay layer") }
+    }
+
+    /// Shake the mouse and the cursor warps to the centre of the screen the
+    /// head is looking at; a pointer stranded on a hidden desktop comes home
+    /// on its own. Both run off the 20 Hz cursor timer.
+    private func cursorShakeAndRescueTick(renderer: Renderer) {
+        guard isRunning, source == .glassesOnly,
+              let location = mousePoller.location else { return }
+        let now = Date().timeIntervalSinceReferenceDate
+        mouseTrail.append((now, location.x))
+        mouseTrail.removeAll { now - $0.t > 0.6 }
+
+        // The rescue: a pointer on a parked dark display is invisible, and
+        // "my mouse is gone" was the day-one side-screen complaint.
+        let hidden = hiddenDisplayIDs()
+        if hidden.contains(where: { CGDisplayBounds($0).contains(location) }) {
+            hiddenCursorTicks += 1
+            if hiddenCursorTicks >= 10 {   // ~half a second — not a graze
+                hiddenCursorTicks = 0
+                warpCursor(toSurface: 0)
+            }
+            return
+        }
+        hiddenCursorTicks = 0
+
+        // The shake: several horizontal reversals with real travel, all
+        // within the trail's 0.6 s window.
+        guard Date().timeIntervalSince(lastShakeWarp) > 1.2,
+              mouseTrail.count >= 6 else { return }
+        var reversals = 0
+        var travel: CGFloat = 0
+        var lastDX: CGFloat = 0
+        for index in 1..<mouseTrail.count {
+            let dx = mouseTrail[index].x - mouseTrail[index - 1].x
+            travel += abs(dx)
+            guard abs(dx) > 15 else { continue }
+            if abs(lastDX) > 15, (dx < 0) != (lastDX < 0) { reversals += 1 }
+            lastDX = dx
+        }
+        if reversals >= 3, travel > 250 {
+            lastShakeWarp = Date()
+            mouseTrail.removeAll()
+            warpCursor(toSurface: renderer.lookedSurface(
+                yawRadians: filter.yawDegrees * .pi / 180))
+        }
+    }
+
+    private func warpCursor(toSurface surface: Int) {
+        let bounds: CGRect? = switch surface {
+        case 1: cursorSideBounds[0]
+        case 2: cursorSideBounds[1]
+        default: cursorMainBounds.isEmpty ? nil : cursorMainBounds
+        }
+        guard let bounds else { return }
+        CGWarpMouseCursorPosition(CGPoint(x: bounds.midX, y: bounds.midY))
+        Self.appendLog("cursor warped home to the \(surface == 0 ? "main" : surface == 1 ? "right" : "left") screen")
     }
 
     /// The cursor sprite follows the *system* cursor's current shape —

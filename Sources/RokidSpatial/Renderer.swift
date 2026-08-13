@@ -150,6 +150,22 @@ final class Renderer: NSObject, MTKViewDelegate {
         cursorLock.unlock()
     }
 
+    /// Angular position of each active side screen this frame (radians,
+    /// nil = inactive), published by draw so the shake-warp can ask which
+    /// screen the head is aimed at. Guarded by cursorLock.
+    private var lastAzimuths: [Float?] = [nil, nil]
+
+    /// Which surface the head is looking at: 0 main, 1 right side, 2 left.
+    /// A side wins when the gaze is angularly closer to it than to centre.
+    func lookedSurface(yawRadians: Float) -> Int {
+        cursorLock.lock(); defer { cursorLock.unlock() }
+        for (index, azimuth) in lastAzimuths.enumerated() {
+            guard let azimuth else { continue }
+            if abs(yawRadians - azimuth) < abs(yawRadians) { return index + 1 }
+        }
+        return 0
+    }
+
     /// Called each frame; returns which surface the cursor is on (0 main,
     /// 1 right side, 2 left side) and its UV (0…1, top-left origin), or nil
     /// to skip drawing.
@@ -434,6 +450,10 @@ final class Renderer: NSObject, MTKViewDelegate {
                 fillMesh(sideVertexBuffers[index], aspect: aspect, azimuth: azimuth)
                 sideRender.append((index, sideTexture, aspect, azimuth))
             }
+            cursorLock.lock()
+            lastAzimuths = [nil, nil]
+            for side in sideRender { lastAzimuths[side.index] = side.azimuth }
+            cursorLock.unlock()
 
             // Convert the quoted diagonal FOV into the vertical one Metal wants.
             let diagonalTangent = tan(Self.diagonalFOV / 2)
