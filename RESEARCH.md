@@ -252,3 +252,41 @@ and it must be set before Metal loads. The app now setenv's it for
 itself at process start from the persisted toggle (so the toggle takes
 effect at the next session start). Whether the fast phase is Direct
 remains unread.
+
+## The image-quality pipeline, and the temporal verdict (2026-08-14)
+
+Four processing stages were added in one evening (the SpaceWalker
+feature safari having previously yielded only features, not image
+logic):
+
+1. **Sharpen** — unsharp mask clamped to the local 4-neighbour min/max
+   (the clamp is what prevents halos). Counteracts bilinear's softening
+   under head-tracked sub-pixel drift. Slider, all desktop paths.
+2. **Crisp sampling** — Catmull-Rom in 9 bilinear taps instead of plain
+   bilinear. Matters under magnification; ~identical at 1:1.
+3. **Linear-light filtering** — the capture is wrapped as
+   `bgra8Unorm_srgb` so texels decode to linear *before* the bilinear
+   weights apply; the drawable re-encodes on write. Pipelines exist in
+   both formats, picked per frame from the drawable's actual format, so
+   the live toggle can never mismatch. Eye-care/peek multipliers are
+   raised to 2.2 in linear to keep the tuned feel.
+4. **Temporal supersampling** — TAA-lite: scene offscreen, MRT
+   accumulation (drawable + ping-pong history), reprojection as a pure
+   3×3 direction rotation (rotation-only camera ⇒ depth-free and exact),
+   3×3 neighbourhood clamp against ghosting, α = 0.88.
+
+**Temporal verdict: rejected as default, kept as a toggle.** At this
+panel's 1:1 mapping the accumulation reads *slightly blurrier* than
+single-frame — first with bilinear history (blur compounds per resample,
+the classic TAA failure), and still, milder, after the standard cure
+(Catmull-Rom history resampling). The head's micro-motion supplies
+sub-pixel phases, but each reprojection resample costs more detail than
+the averaging recovers on static text at native scale. GPU cost was
+irrelevant (60 fps, 0 slow throughout). Would be worth revisiting only
+where the desktop is minified (mirror mode), where the same averaging
+that softens 1:1 text suppresses aliasing instead.
+
+Also decoded from SpaceWalker's binary during this pass: its "Adaptive
+VSync" is `CAMetalLayer.setDisplaySyncEnabled:` (ours now has the same
+toggle); its "Reduce Motion Blur" traces only to a stored preference —
+consumer unknown — and our `motionLock` already chases that goal.

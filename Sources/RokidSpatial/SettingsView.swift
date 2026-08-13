@@ -332,7 +332,7 @@ struct SettingsView: View {
             Toggle("Temporal supersample", isOn: $controller.temporalSS)
                 .font(.caption)
             if controller.temporalSS {
-                Text("Accumulates frames while the head micro-moves — still text firms up beyond single-frame detail. Watch scrolling and video for ghosting; that verdict decides if this stays.")
+                Text("Research toggle. Verdict on this panel at 1:1: slightly softer than single-frame, even with Catmull-Rom history — kept for future minified-mode experiments.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
