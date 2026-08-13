@@ -99,6 +99,9 @@ final class SpatialController: ObservableObject {
     /// whenever the head moves and the desktop's pixel rows beat against the
     /// panel raster. Live-switchable so the difference can be judged by eye.
     @Published var antiMoire = false { didSet { renderer?.antiMoire = antiMoire; persist(antiMoire, "antiMoire") } }
+    /// Fade the render to black as the head pitches down (35-55°), so a
+    /// glance at the keyboard sees the real desk through the optics.
+    @Published var headDownPeek = false { didSet { renderer?.headDownPeek = headDownPeek; persist(headDownPeek, "headDownPeek") } }
     /// Glasses panel variants beyond the default 60 Hz 2D: stereo SBS at 60
     /// or 90 (per-eye rendering with the IPD offset onto a separate working
     /// virtual display), and plain 120 Hz (mode 3, no stereo — the glasses'
@@ -401,6 +404,7 @@ final class SpatialController: ObservableObject {
         if d.object(forKey: "doubleTapRecenter") != nil { doubleTapRecenter = d.bool(forKey: "doubleTapRecenter") }
         if d.object(forKey: "curved") != nil { curved = d.bool(forKey: "curved") }
         if d.object(forKey: "antiMoire") != nil { antiMoire = d.bool(forKey: "antiMoire") }
+        if d.object(forKey: "headDownPeek") != nil { headDownPeek = d.bool(forKey: "headDownPeek") }
         if d.object(forKey: "metalHUD") != nil { metalHUD = d.bool(forKey: "metalHUD") }
         // The env override never persists: observers don't fire in init.
         if ProcessInfo.processInfo.environment["MTL_HUD_ENABLED"] == "1" { metalHUD = true }
@@ -756,6 +760,7 @@ final class SpatialController: ObservableObject {
         renderer.lookAhead = lookAhead
         renderer.steady = steady
         renderer.antiMoire = antiMoire
+        renderer.headDownPeek = headDownPeek
         renderer.targetFPS = frameRate
         renderer.sideGap = screenGap * .pi / 180
         self.renderer = renderer

@@ -38,7 +38,8 @@ vertex VertexOut vertexMain(uint vid [[vertex_id]],
 }
 
 fragment float4 fragmentMain(VertexOut in [[stage_in]],
-                             texture2d<float, access::sample> tex [[texture(0)]])
+                             texture2d<float, access::sample> tex [[texture(0)]],
+                             constant float &dim [[buffer(0)]])
 {
     // No mip filtering, deliberately. Mipmapping trades sharpness for reduced
     // aliasing, and sharpness is the scarcer resource here: the desktop is
@@ -47,7 +48,7 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
     constexpr sampler smp(mag_filter::linear,
                           min_filter::linear,
                           address::clamp_to_edge);
-    return float4(tex.sample(smp, in.uv).rgb, 1.0);
+    return float4(tex.sample(smp, in.uv).rgb * dim, 1.0);
 }
 
 // Anti-moiré variant: a 4-tap rotated-grid supersample, taps spread across
@@ -57,7 +58,8 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
 // sub-pixel sampling phase. Averaging four offset taps flattens the beat
 // at the cost of a slight softening.
 fragment float4 fragmentSmooth(VertexOut in [[stage_in]],
-                               texture2d<float, access::sample> tex [[texture(0)]])
+                               texture2d<float, access::sample> tex [[texture(0)]],
+                               constant float &dim [[buffer(0)]])
 {
     constexpr sampler smp(mag_filter::linear,
                           min_filter::linear,
@@ -67,17 +69,18 @@ fragment float4 fragmentSmooth(VertexOut in [[stage_in]],
              + tex.sample(smp, in.uv - 0.375*dx + 0.125*dy).rgb
              + tex.sample(smp, in.uv - 0.125*dx - 0.375*dy).rgb
              + tex.sample(smp, in.uv + 0.375*dx - 0.125*dy).rgb;
-    return float4(c * 0.25, 1.0);
+    return float4(c * 0.25 * dim, 1.0);
 }
 
 // The cursor sprite keeps its alpha — it is blended over the desktop quad.
 fragment float4 fragmentCursor(VertexOut in [[stage_in]],
-                               texture2d<float, access::sample> tex [[texture(0)]])
+                               texture2d<float, access::sample> tex [[texture(0)]],
+                               constant float &dim [[buffer(0)]])
 {
     constexpr sampler smp(mag_filter::linear,
                           min_filter::linear,
                           address::clamp_to_edge);
-    return tex.sample(smp, in.uv);
+    return tex.sample(smp, in.uv) * dim;
 }
 """
 
@@ -98,6 +101,16 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     /// Selects the anti-moiré fragment path; flippable live from settings.
     var antiMoire = false
+
+    /// Head-down peek (idea borrowed from VITURE's SpaceWalker): as the head
+    /// pitches down toward the keyboard the whole render fades to black, and
+    /// black on a birdbath panel is see-through — so looking down shows the
+    /// real desk, looking back up brings the screen back. The fade runs over
+    /// an angle range rather than a switch, and the pose it reads is already
+    /// steady-smoothed, so there is nothing to debounce.
+    var headDownPeek = false
+    private static let peekStart: Float = 35 * .pi / 180
+    private static let peekFull: Float = 55 * .pi / 180
 
     /// The frame-duration budget a draw is judged against, matching the
     /// panel's configured refresh rate.
@@ -379,6 +392,17 @@ final class Renderer: NSObject, MTKViewDelegate {
             commandBuffer.commit()
             return
         }
+
+        // Head-down peek: fade everything toward black between the start and
+        // full angles. Black is what makes the optics see-through, so this
+        // must multiply every fragment — desktop, sides, cursor alike.
+        var dim: Float = 1
+        if headDownPeek {
+            let forward = head.act(SIMD3<Float>(0, 0, -1))
+            let pitchDown = asin(max(-1, min(1, -forward.y)))
+            dim = 1 - simd_smoothstep(Self.peekStart, Self.peekFull, pitchDown)
+        }
+        encoder.setFragmentBytes(&dim, length: MemoryLayout<Float>.size, index: 0)
 
         if let texture {
             let width = Double(view.drawableSize.width)

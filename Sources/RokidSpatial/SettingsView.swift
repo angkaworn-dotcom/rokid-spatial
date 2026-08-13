@@ -182,6 +182,8 @@ struct SettingsView: View {
                 }
                 Toggle("Anti-moiré resample", isOn: $controller.antiMoire)
 
+                Toggle("Head-down peek", isOn: $controller.headDownPeek)
+
                 Toggle("Performance HUD", isOn: $controller.metalHUD)
                 if controller.metalHUD != controller.metalHUDAtLaunch {
                     Text("Takes effect after reopening the app.")
