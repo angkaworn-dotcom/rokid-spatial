@@ -201,19 +201,29 @@ struct SettingsView: View {
                     .labelsHidden()
                     .disabled(controller.isRunning)
                 }
-                if controller.sideScreens != .none {
-                    labelled("Layout") {
-                        Picker("", selection: $controller.sideLayout) {
-                            ForEach(SpatialController.SideLayout.allCases) { layout in
-                                Text(layout.label).tag(layout)
-                            }
+                // Always visible, greyed until side screens are on — a row
+                // that only appears after another picker changes is a row
+                // nobody finds (asked about live, minutes after shipping).
+                labelled("Layout") {
+                    Picker("", selection: $controller.sideLayout) {
+                        ForEach(SpatialController.SideLayout.allCases) { layout in
+                            Text(layout.label).tag(layout)
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        // The SBS variants' wall parks displays above it,
-                        // exactly where Stacked would hang a screen.
-                        .disabled(controller.isRunning || controller.sbsMode != .off)
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    // The SBS variants' wall parks displays above it,
+                    // exactly where Stacked would hang a screen.
+                    .disabled(controller.isRunning || controller.sbsMode != .off
+                              || controller.sideScreens == .none)
+                }
+                if controller.sideScreens == .none {
+                    Text("Layout applies to the side screens — pick Right or L + R above first.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if controller.sideScreens != .none {
                     if controller.sideLayout == .stacked {
                         Text("\"Right\" hangs above the main screen, \"L + R\" adds one below. The pointer leaves through the top and bottom edges.")
                             .font(.caption2)
