@@ -24,6 +24,31 @@ struct VertexOut {
     float2 uv;
 };
 
+// Shared fragment parameters. tint.rgb = per-channel gains (eye care),
+// tint.a = overall dim (head-down peek). misc.x = sharpen strength 0-1.
+struct FragParams {
+    float4 tint;
+    float4 misc;
+};
+
+// Unsharp mask clamped to the local min/max — the clamp is what separates
+// "text pops" from "text grows white halos". Four extra taps; base already
+// paid for. Counteracts the softening bilinear filtering adds whenever the
+// desktop sits at a sub-pixel offset, which under head tracking is always.
+static float3 sharpened(float3 base, texture2d<float, access::sample> tex,
+                        sampler smp, float2 uv, float amount)
+{
+    float2 texel = 1.0 / float2(tex.get_width(), tex.get_height());
+    float3 n = tex.sample(smp, uv + float2(0, -texel.y)).rgb;
+    float3 s = tex.sample(smp, uv + float2(0,  texel.y)).rgb;
+    float3 e = tex.sample(smp, uv + float2( texel.x, 0)).rgb;
+    float3 w = tex.sample(smp, uv + float2(-texel.x, 0)).rgb;
+    float3 blur = (n + s + e + w) * 0.25;
+    float3 lo = min(base, min(min(n, s), min(e, w)));
+    float3 hi = max(base, max(max(n, s), max(e, w)));
+    return clamp(base + (base - blur) * (amount * 1.5), lo, hi);
+}
+
 // Vertices arrive as float4 pairs: position (xyz, 1) then UV in (x, y).
 // Real 3D positions rather than a flat local quad, because the screen
 // surface may be curved — geometry is built CPU-side per frame.
@@ -39,7 +64,7 @@ vertex VertexOut vertexMain(uint vid [[vertex_id]],
 
 fragment float4 fragmentMain(VertexOut in [[stage_in]],
                              texture2d<float, access::sample> tex [[texture(0)]],
-                             constant float4 &tint [[buffer(0)]])
+                             constant FragParams &params [[buffer(0)]])
 {
     // No mip filtering, deliberately. Mipmapping trades sharpness for reduced
     // aliasing, and sharpness is the scarcer resource here: the desktop is
@@ -48,7 +73,58 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
     constexpr sampler smp(mag_filter::linear,
                           min_filter::linear,
                           address::clamp_to_edge);
-    return float4(tex.sample(smp, in.uv).rgb * tint.rgb * tint.a, 1.0);
+    float3 c = tex.sample(smp, in.uv).rgb;
+    if (params.misc.x > 0.001) {
+        c = sharpened(c, tex, smp, in.uv, params.misc.x);
+    }
+    return float4(c * params.tint.rgb * params.tint.a, 1.0);
+}
+
+// Crisp-sampling variant: Catmull-Rom in 9 bilinear taps. Plain bilinear
+// visibly blurs text whenever the desktop is *magnified* onto more panel
+// pixels than it has points (the small virtual-desktop sizes); Catmull-Rom's
+// negative lobes keep edges tight, and at 1:1 it degrades gracefully to
+// nearly the same image. The 9-tap trick: evaluate the 4×4 kernel as 3×3
+// bilinear fetches whose offsets encode the weights.
+fragment float4 fragmentCrisp(VertexOut in [[stage_in]],
+                              texture2d<float, access::sample> tex [[texture(0)]],
+                              constant FragParams &params [[buffer(0)]])
+{
+    constexpr sampler smp(mag_filter::linear,
+                          min_filter::linear,
+                          address::clamp_to_edge);
+    float2 size = float2(tex.get_width(), tex.get_height());
+    float2 pos = in.uv * size;
+    float2 centre = floor(pos - 0.5) + 0.5;
+    float2 f = pos - centre;
+    float2 f2 = f * f, f3 = f2 * f;
+
+    // Catmull-Rom weights per axis.
+    float2 w0 = -0.5 * f3 + f2 - 0.5 * f;
+    float2 w1 =  1.5 * f3 - 2.5 * f2 + 1.0;
+    float2 w2 = -1.5 * f3 + 2.0 * f2 + 0.5 * f;
+    float2 w3 =  0.5 * f3 - 0.5 * f2;
+    float2 w12 = w1 + w2;
+
+    float2 t0 = (centre - 1.0) / size;
+    float2 t12 = (centre + w2 / w12) / size;
+    float2 t3 = (centre + 2.0) / size;
+
+    float3 c =
+        tex.sample(smp, float2(t0.x,  t0.y)).rgb  * w0.x  * w0.y +
+        tex.sample(smp, float2(t12.x, t0.y)).rgb  * w12.x * w0.y +
+        tex.sample(smp, float2(t3.x,  t0.y)).rgb  * w3.x  * w0.y +
+        tex.sample(smp, float2(t0.x,  t12.y)).rgb * w0.x  * w12.y +
+        tex.sample(smp, float2(t12.x, t12.y)).rgb * w12.x * w12.y +
+        tex.sample(smp, float2(t3.x,  t12.y)).rgb * w3.x  * w12.y +
+        tex.sample(smp, float2(t0.x,  t3.y)).rgb  * w0.x  * w3.y +
+        tex.sample(smp, float2(t12.x, t3.y)).rgb  * w12.x * w3.y +
+        tex.sample(smp, float2(t3.x,  t3.y)).rgb  * w3.x  * w3.y;
+    c = max(c, 0.0);
+    if (params.misc.x > 0.001) {
+        c = sharpened(c, tex, smp, in.uv, params.misc.x);
+    }
+    return float4(c * params.tint.rgb * params.tint.a, 1.0);
 }
 
 // Anti-moiré variant: a 4-tap rotated-grid supersample, taps spread across
@@ -59,29 +135,32 @@ fragment float4 fragmentMain(VertexOut in [[stage_in]],
 // at the cost of a slight softening.
 fragment float4 fragmentSmooth(VertexOut in [[stage_in]],
                                texture2d<float, access::sample> tex [[texture(0)]],
-                               constant float4 &tint [[buffer(0)]])
+                               constant FragParams &params [[buffer(0)]])
 {
     constexpr sampler smp(mag_filter::linear,
                           min_filter::linear,
                           address::clamp_to_edge);
     float2 dx = dfdx(in.uv), dy = dfdy(in.uv);
-    float3 c = tex.sample(smp, in.uv + 0.125*dx + 0.375*dy).rgb
-             + tex.sample(smp, in.uv - 0.375*dx + 0.125*dy).rgb
-             + tex.sample(smp, in.uv - 0.125*dx - 0.375*dy).rgb
-             + tex.sample(smp, in.uv + 0.375*dx - 0.125*dy).rgb;
-    return float4(c * 0.25 * tint.rgb * tint.a, 1.0);
+    float3 c = (tex.sample(smp, in.uv + 0.125*dx + 0.375*dy).rgb
+              + tex.sample(smp, in.uv - 0.375*dx + 0.125*dy).rgb
+              + tex.sample(smp, in.uv - 0.125*dx - 0.375*dy).rgb
+              + tex.sample(smp, in.uv + 0.375*dx - 0.125*dy).rgb) * 0.25;
+    if (params.misc.x > 0.001) {
+        c = sharpened(c, tex, smp, in.uv, params.misc.x);
+    }
+    return float4(c * params.tint.rgb * params.tint.a, 1.0);
 }
 
 // The cursor sprite keeps its alpha — it is blended over the desktop quad.
 fragment float4 fragmentCursor(VertexOut in [[stage_in]],
                                texture2d<float, access::sample> tex [[texture(0)]],
-                               constant float4 &tint [[buffer(0)]])
+                               constant FragParams &params [[buffer(0)]])
 {
     constexpr sampler smp(mag_filter::linear,
                           min_filter::linear,
                           address::clamp_to_edge);
     float4 c = tex.sample(smp, in.uv);
-    return float4(c.rgb * tint.rgb * tint.a, c.a * tint.a);
+    return float4(c.rgb * params.tint.rgb * params.tint.a, c.a * params.tint.a);
 }
 """
 
@@ -98,10 +177,26 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let commandQueue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
     private let smoothPipeline: MTLRenderPipelineState
+    private let crispPipeline: MTLRenderPipelineState
     private let cursorPipeline: MTLRenderPipelineState
 
     /// Selects the anti-moiré fragment path; flippable live from settings.
     var antiMoire = false
+
+    /// Catmull-Rom sampling instead of bilinear — tighter text when the
+    /// desktop is magnified. Anti-moiré wins when both are on: minification
+    /// aliasing is the uglier artefact.
+    var crisp = false
+
+    /// Post-sample sharpening strength, 0 (off) to 1. Applied in every
+    /// desktop fragment path, never to the cursor sprite.
+    var sharpen: Float = 0
+
+    /// CPU-side mirror of the shader's FragParams.
+    private struct FragParams {
+        var tint: SIMD4<Float>
+        var misc: SIMD4<Float>
+    }
 
     /// Head-down peek (idea borrowed from VITURE's SpaceWalker): as the head
     /// pitches down toward the keyboard the whole render fades to black, and
@@ -309,6 +404,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             descriptor.fragmentFunction = library.makeFunction(name: "fragmentSmooth")
             smoothPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
 
+            descriptor.fragmentFunction = library.makeFunction(name: "fragmentCrisp")
+            crispPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+
             // Same vertex path, alpha-blended fragment for the cursor sprite.
             // CGImage-sourced textures are premultiplied, hence .one.
             descriptor.fragmentFunction = library.makeFunction(name: "fragmentCursor")
@@ -465,9 +563,13 @@ final class Renderer: NSObject, MTKViewDelegate {
             let start = peekAngle * .pi / 180
             dim = 1 - simd_smoothstep(start, start + 20 * .pi / 180, pitchDown)
         }
-        // rgb = per-channel gains (eye-care warmth), a = overall dim (peek).
-        var tint = SIMD4<Float>(1, 1 - 0.18 * eyeCare, 1 - 0.38 * eyeCare, dim)
-        encoder.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.size, index: 0)
+        // tint rgb = per-channel gains (eye-care warmth), a = overall dim
+        // (peek); misc.x = sharpen strength.
+        var params = FragParams(
+            tint: SIMD4<Float>(1, 1 - 0.18 * eyeCare, 1 - 0.38 * eyeCare, dim),
+            misc: SIMD4<Float>(sharpen, 0, 0, 0)
+        )
+        encoder.setFragmentBytes(&params, length: MemoryLayout<FragParams>.size, index: 0)
 
         if let texture {
             let width = Double(view.drawableSize.width)
@@ -590,7 +692,8 @@ final class Renderer: NSObject, MTKViewDelegate {
                                        length: MemoryLayout<simd_float4x4>.size,
                                        index: 1)
 
-                encoder.setRenderPipelineState(antiMoire ? smoothPipeline : pipeline)
+                encoder.setRenderPipelineState(
+                    antiMoire ? smoothPipeline : (crisp ? crispPipeline : pipeline))
                 encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
                 encoder.setFragmentTexture(texture, index: 0)
                 encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0,

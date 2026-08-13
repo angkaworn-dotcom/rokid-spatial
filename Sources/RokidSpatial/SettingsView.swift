@@ -321,8 +321,21 @@ struct SettingsView: View {
 
     private var tuningTab: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Image-quality pipeline. Sharpen fights the softness bilinear
+            // filtering adds while the desktop drifts across sub-pixel
+            // offsets (i.e. always, under head tracking); Crisp swaps
+            // bilinear for Catmull-Rom, which keeps magnified text tight.
+            slider("Sharpen", value: $controller.sharpen,
+                   range: 0...1, unit: "", format: "%.2f")
+            Toggle("Crisp sampling (Catmull-Rom)", isOn: $controller.crispSampling)
+                .font(.caption)
             Toggle("Anti-moiré resample", isOn: $controller.antiMoire)
                 .font(.caption)
+            if controller.antiMoire && controller.crispSampling {
+                Text("Anti-moiré wins while both are on.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
 
             Toggle("Adaptive VSync", isOn: $controller.adaptiveVSync)
                 .font(.caption)

@@ -147,6 +147,11 @@ final class SpatialController: ObservableObject {
     /// whenever the head moves and the desktop's pixel rows beat against the
     /// panel raster. Live-switchable so the difference can be judged by eye.
     @Published var antiMoire = false { didSet { renderer?.antiMoire = antiMoire; persist(antiMoire, "antiMoire") } }
+    /// Post-sample sharpening (CAS-style clamped unsharp mask), 0 = off.
+    @Published var sharpen: Float = 0 { didSet { renderer?.sharpen = sharpen; persist(sharpen, "sharpen") } }
+    /// Catmull-Rom sampling instead of bilinear — crisper text under
+    /// magnification. Live-switchable so the difference can be judged by eye.
+    @Published var crispSampling = false { didSet { renderer?.crisp = crispSampling; persist(crispSampling, "crispSampling") } }
     /// Fade the render to black as the head pitches down (35-55°), so a
     /// glance at the keyboard sees the real desk through the optics.
     @Published var headDownPeek = false { didSet { renderer?.headDownPeek = headDownPeek; persist(headDownPeek, "headDownPeek") } }
@@ -513,6 +518,8 @@ final class SpatialController: ObservableObject {
         load("peekAngle", into: &peekAngle)
         load("eyeCare", into: &eyeCare)
         load("glideSpeed", into: &glideSpeed)
+        load("sharpen", into: &sharpen)
+        if d.object(forKey: "crispSampling") != nil { crispSampling = d.bool(forKey: "crispSampling") }
         if d.object(forKey: "lockPitch") != nil { lockPitch = d.bool(forKey: "lockPitch") }
         if d.object(forKey: "lockYaw") != nil { lockYaw = d.bool(forKey: "lockYaw") }
         if d.object(forKey: "lockRoll") != nil { lockRoll = d.bool(forKey: "lockRoll") }
@@ -849,6 +856,8 @@ final class SpatialController: ObservableObject {
         renderer.lookAhead = lookAhead
         renderer.steady = steady
         renderer.antiMoire = antiMoire
+        renderer.sharpen = sharpen
+        renderer.crisp = crispSampling
         renderer.headDownPeek = headDownPeek
         renderer.peekAngle = peekAngle
         renderer.eyeCare = eyeCare
