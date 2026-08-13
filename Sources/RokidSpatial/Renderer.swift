@@ -151,6 +151,69 @@ fragment float4 fragmentSmooth(VertexOut in [[stage_in]],
     return float4(c * params.tint.rgb * params.tint.a, 1.0);
 }
 
+// Temporal supersampling accumulation. The scene is a rotation-only camera
+// looking at screens, so last frame's image reprojects onto this frame's
+// with a pure direction rotation — no depth needed, no disocclusion. Each
+// output pixel blends the freshly rendered scene with the reprojected
+// history, clamped to the scene's 3×3 neighbourhood so moving content
+// (scrolling, video, the fade of a peek) sheds stale history immediately
+// instead of ghosting. Head micro-motion supplies the sub-pixel phase
+// diversity that makes the average carry more detail than one frame.
+struct AccumParams {
+    float4 reproj0;   // rows of the current→previous direction rotation
+    float4 reproj1;
+    float4 reproj2;
+    float4 info;      // x = tan(fovX/2), y = tan(fovY/2), z = history alpha
+};
+
+struct AccumOut {
+    float4 display [[color(0)]];
+    float4 history [[color(1)]];
+};
+
+fragment AccumOut fragmentAccum(VertexOut in [[stage_in]],
+                                texture2d<float, access::sample> scene [[texture(0)]],
+                                texture2d<float, access::sample> history [[texture(1)]],
+                                constant AccumParams &p [[buffer(0)]])
+{
+    constexpr sampler smp(mag_filter::linear,
+                          min_filter::linear,
+                          address::clamp_to_edge);
+    float3 cur = scene.sample(smp, in.uv).rgb;
+
+    float3 outc = cur;
+    if (p.info.z > 0.001) {
+        // Where did this pixel's view direction land last frame?
+        float2 ndc = float2(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0);
+        float3 dir = float3(ndc.x * p.info.x, ndc.y * p.info.y, -1.0);
+        float3x3 rot = float3x3(p.reproj0.xyz, p.reproj1.xyz, p.reproj2.xyz);
+        float3 prev = rot * dir;
+        if (prev.z < -1e-4) {
+            float2 ndcPrev = float2((prev.x / -prev.z) / p.info.x,
+                                    (prev.y / -prev.z) / p.info.y);
+            float2 uvPrev = float2(ndcPrev.x * 0.5 + 0.5, 0.5 - ndcPrev.y * 0.5);
+            if (all(uvPrev >= 0.0) && all(uvPrev <= 1.0)) {
+                // Neighbourhood clamp: history may not stray outside what
+                // the current frame could plausibly contain.
+                float2 texel = 1.0 / float2(scene.get_width(), scene.get_height());
+                float3 mn = cur, mx = cur;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if (dx == 0 && dy == 0) continue;
+                        float3 s = scene.sample(smp, in.uv + float2(dx, dy) * texel).rgb;
+                        mn = min(mn, s);
+                        mx = max(mx, s);
+                    }
+                }
+                float3 hist = clamp(history.sample(smp, uvPrev).rgb, mn, mx);
+                outc = mix(cur, hist, p.info.z);
+            }
+        }
+    }
+    float4 c = float4(outc, 1.0);
+    return AccumOut { c, c };
+}
+
 // The cursor sprite keeps its alpha — it is blended over the desktop quad.
 fragment float4 fragmentCursor(VertexOut in [[stage_in]],
                                texture2d<float, access::sample> tex [[texture(0)]],
@@ -206,6 +269,28 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// This flag drives the capture-texture view format; the framebuffer
     /// side follows the view's colorPixelFormat, set by the controller.
     var linearLight = false
+
+    /// Temporal supersampling: accumulate frames in a reprojected history
+    /// buffer. Mono paths only — the stereo framebuffer holds two eyes whose
+    /// reprojections differ, and the daily driver is mono.
+    var temporalSS = false
+
+    // TSS state. The scene renders offscreen, the accumulation pass writes
+    // the drawable and the new history in one MRT pass, and the cursor is
+    // drawn on top afterwards — a sprite that moves every frame has no
+    // business being temporally accumulated.
+    private var accumPipelines: [MTLRenderPipelineState] = []
+    private var sceneTexture: MTLTexture?
+    private var historyTextures: [MTLTexture?] = [nil, nil]
+    private var historyIndex = 0
+    private var historyValid = false
+    private var prevRenderHead = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+    private let fsQuadBuffer: MTLBuffer
+
+    /// How much of the blend is history. 0.88 ≈ an effective window of
+    /// several frames — enough accumulation to matter, short enough that
+    /// the clamp keeps motion clean.
+    private let temporalAlpha: Float = 0.88
 
     /// CPU-side mirror of the shader's FragParams.
     private struct FragParams {
@@ -437,6 +522,16 @@ final class Renderer: NSObject, MTKViewDelegate {
             crispPipelines = try makePair("fragmentCrisp")
             // Same vertex path, alpha-blended fragment for the cursor sprite.
             cursorPipelines = try makePair("fragmentCursor", blended: true)
+
+            // Accumulation writes two attachments of the same format.
+            accumPipelines = try formats.map { format in
+                let descriptor = MTLRenderPipelineDescriptor()
+                descriptor.vertexFunction = library.makeFunction(name: "vertexMain")
+                descriptor.fragmentFunction = library.makeFunction(name: "fragmentAccum")
+                descriptor.colorAttachments[0].pixelFormat = format
+                descriptor.colorAttachments[1].pixelFormat = format
+                return try device.makeRenderPipelineState(descriptor: descriptor)
+            }
         } catch {
             NSLog("Renderer: shader compilation failed — \(error)")
             return nil
@@ -446,12 +541,24 @@ final class Renderer: NSObject, MTKViewDelegate {
         // frame because size, distance and curvature are all live-adjustable.
         // Flat screens waste the columns; curved ones need them.
         let meshLength = MemoryLayout<SIMD4<Float>>.stride * Self.meshVertexCount * 2
+        // Fullscreen strip for the accumulation pass: NDC positions straight
+        // through vertexMain with an identity matrix.
+        let fsQuad: [SIMD4<Float>] = [
+            SIMD4(-1, -1, 0, 1), SIMD4(0, 1, 0, 0),
+            SIMD4( 1, -1, 0, 1), SIMD4(1, 1, 0, 0),
+            SIMD4(-1,  1, 0, 1), SIMD4(0, 0, 0, 0),
+            SIMD4( 1,  1, 0, 1), SIMD4(1, 0, 0, 0),
+        ]
         guard let buffer = device.makeBuffer(length: meshLength, options: .storageModeShared),
               let sideRight = device.makeBuffer(length: meshLength, options: .storageModeShared),
-              let sideLeft = device.makeBuffer(length: meshLength, options: .storageModeShared)
+              let sideLeft = device.makeBuffer(length: meshLength, options: .storageModeShared),
+              let fsBuffer = device.makeBuffer(
+                  bytes: fsQuad, length: MemoryLayout<SIMD4<Float>>.stride * fsQuad.count,
+                  options: .storageModeShared)
         else { return nil }
         vertexBuffer = buffer
         sideVertexBuffers = [sideRight, sideLeft]
+        fsQuadBuffer = fsBuffer
 
         super.init()
 
@@ -564,6 +671,21 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         let texture = prepareTexture(commandBuffer: commandBuffer)
 
+        // Temporal supersampling: retarget the scene pass at the offscreen
+        // texture and let the accumulation pass own the drawable. Mono only;
+        // when off, everything draws straight to the drawable as before.
+        let tssActive = temporalSS && !stereo && texture != nil
+        var sceneTarget: MTLTexture?
+        if tssActive {
+            ensureTSSResources(size: view.drawableSize,
+                               format: drawable.texture.pixelFormat)
+            if let scene = sceneTexture {
+                descriptor.colorAttachments[0].texture = scene
+                sceneTarget = scene
+            }
+        }
+        if sceneTarget == nil { historyValid = false }
+
         descriptor.colorAttachments[0].loadAction = .clear
         descriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
@@ -601,6 +723,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         var params = FragParams(tint: tint, misc: SIMD4<Float>(sharpen, 0, 0, 0))
         encoder.setFragmentBytes(&params, length: MemoryLayout<FragParams>.size, index: 0)
+
+        // tan(fovX/2), tan(fovY/2) — captured for the accumulation pass's
+        // direction math, filled in once the projection is derived below.
+        var accumTans = SIMD2<Float>(0, 0)
 
         if let texture {
             let width = Double(view.drawableSize.width)
@@ -657,6 +783,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             let projection = simd_float4x4.perspective(
                 fovYRadians: fovY, aspect: aspect, near: 0.05, far: 100
             )
+            accumTans = SIMD2(verticalTangent * aspect, verticalTangent)
 
             // How many panel pixels the virtual screen actually spans. Compared
             // against the captured width, this is the sharpness budget: below
@@ -750,8 +877,74 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         encoder.endEncoding()
+
+        // Accumulation: blend the fresh scene with the reprojected history,
+        // writing the drawable and the new history in one MRT pass.
+        if let scene = sceneTarget {
+            let cur = 1 - historyIndex
+            let accumDescriptor = MTLRenderPassDescriptor()
+            accumDescriptor.colorAttachments[0].texture = drawable.texture
+            accumDescriptor.colorAttachments[0].loadAction = .dontCare
+            accumDescriptor.colorAttachments[0].storeAction = .store
+            accumDescriptor.colorAttachments[1].texture = historyTextures[cur]
+            accumDescriptor.colorAttachments[1].loadAction = .dontCare
+            accumDescriptor.colorAttachments[1].storeAction = .store
+            if let accum = commandBuffer.makeRenderCommandEncoder(descriptor: accumDescriptor) {
+                let fbIndex = drawable.texture.pixelFormat == .bgra8Unorm_srgb ? 1 : 0
+                accum.setRenderPipelineState(accumPipelines[fbIndex])
+                var identity = matrix_identity_float4x4
+                accum.setVertexBuffer(fsQuadBuffer, offset: 0, index: 0)
+                accum.setVertexBytes(&identity, length: MemoryLayout<simd_float4x4>.size,
+                                     index: 1)
+                // d_prev = R(prevHead⁻¹ · head) · d_cur — rotation only, so
+                // the reprojection is exact for everything at any distance.
+                let delta = simd_float3x3((prevRenderHead.inverse * head).normalized)
+                var accumParams = AccumParamsCPU(
+                    reproj0: SIMD4(delta.columns.0, 0),
+                    reproj1: SIMD4(delta.columns.1, 0),
+                    reproj2: SIMD4(delta.columns.2, 0),
+                    info: SIMD4(accumTans.x, accumTans.y,
+                                historyValid ? temporalAlpha : 0, 0)
+                )
+                accum.setFragmentBytes(&accumParams,
+                                       length: MemoryLayout<AccumParamsCPU>.size, index: 0)
+                accum.setFragmentTexture(scene, index: 0)
+                accum.setFragmentTexture(historyTextures[historyIndex], index: 1)
+                accum.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                accum.endEncoding()
+                historyIndex = cur
+                historyValid = true
+            }
+        }
+
         commandBuffer.present(drawable)
         commandBuffer.commit()
+        prevRenderHead = head
+    }
+
+    /// CPU mirror of the shader's AccumParams.
+    private struct AccumParamsCPU {
+        var reproj0: SIMD4<Float>
+        var reproj1: SIMD4<Float>
+        var reproj2: SIMD4<Float>
+        var info: SIMD4<Float>
+    }
+
+    /// (Re)create the offscreen scene and history textures to match the
+    /// drawable. Any change invalidates the history.
+    private func ensureTSSResources(size: CGSize, format: MTLPixelFormat) {
+        let width = Int(size.width), height = Int(size.height)
+        guard width > 0, height > 0 else { return }
+        if let scene = sceneTexture, scene.width == width, scene.height == height,
+           scene.pixelFormat == format { return }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: format, width: width, height: height, mipmapped: false)
+        descriptor.usage = [.renderTarget, .shaderRead]
+        descriptor.storageMode = .private
+        sceneTexture = device.makeTexture(descriptor: descriptor)
+        historyTextures = [device.makeTexture(descriptor: descriptor),
+                           device.makeTexture(descriptor: descriptor)]
+        historyValid = false
     }
 
     /// Wrap the most recent captured pixel buffer as a Metal texture.

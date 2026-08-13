@@ -156,6 +156,11 @@ final class SpatialController: ObservableObject {
     /// on write. Correct blends; text fringes lose their artificial darkness,
     /// which reads cleaner to some eyes and softer to others — hence a live
     /// toggle rather than a decision made here.
+    /// Temporal supersampling: accumulate reprojected frames so head
+    /// micro-motion's sub-pixel phases average into more detail than any
+    /// single frame carries. Mono modes only; a neighbourhood clamp sheds
+    /// stale history the moment content moves.
+    @Published var temporalSS = false { didSet { renderer?.temporalSS = temporalSS; persist(temporalSS, "temporalSS") } }
     @Published var linearLight = false {
         didSet {
             persist(linearLight, "linearLight")
@@ -534,6 +539,7 @@ final class SpatialController: ObservableObject {
         load("sharpen", into: &sharpen)
         if d.object(forKey: "crispSampling") != nil { crispSampling = d.bool(forKey: "crispSampling") }
         if d.object(forKey: "linearLight") != nil { linearLight = d.bool(forKey: "linearLight") }
+        if d.object(forKey: "temporalSS") != nil { temporalSS = d.bool(forKey: "temporalSS") }
         if d.object(forKey: "lockPitch") != nil { lockPitch = d.bool(forKey: "lockPitch") }
         if d.object(forKey: "lockYaw") != nil { lockYaw = d.bool(forKey: "lockYaw") }
         if d.object(forKey: "lockRoll") != nil { lockRoll = d.bool(forKey: "lockRoll") }
@@ -873,6 +879,7 @@ final class SpatialController: ObservableObject {
         renderer.sharpen = sharpen
         renderer.crisp = crispSampling
         renderer.linearLight = linearLight
+        renderer.temporalSS = temporalSS
         renderer.headDownPeek = headDownPeek
         renderer.peekAngle = peekAngle
         renderer.eyeCare = eyeCare

@@ -329,6 +329,14 @@ struct SettingsView: View {
                    range: 0...1, unit: "", format: "%.2f")
             Toggle("Crisp sampling (Catmull-Rom)", isOn: $controller.crispSampling)
                 .font(.caption)
+            Toggle("Temporal supersample", isOn: $controller.temporalSS)
+                .font(.caption)
+            if controller.temporalSS {
+                Text("Accumulates frames while the head micro-moves — still text firms up beyond single-frame detail. Watch scrolling and video for ghosting; that verdict decides if this stays.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Toggle("Linear-light filtering", isOn: $controller.linearLight)
                 .font(.caption)
             if controller.linearLight {
