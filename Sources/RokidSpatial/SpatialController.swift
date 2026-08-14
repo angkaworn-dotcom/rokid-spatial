@@ -913,7 +913,17 @@ final class SpatialController: ObservableObject {
         if standaloneActive || ultraWideActive, !WindowRescue.hasPermission {
             WindowRescue.requestPermission()
         }
-        let size = displays.glassesPixelSize
+        // Report what is actually being captured. The working-desktop
+        // sessions capture a virtual display, not the glasses' own raster —
+        // saying 1920×1080 while Ultra-Wide streams 2560×1080 is a lie the
+        // status line kept telling (observed live 2026-08-15).
+        let size: CGSize
+        if workingDesktopActive {
+            let desktop = stereoActive ? sbsMode.desktopSize : (width: 2560, height: 1080)
+            size = CGSize(width: desktop.width, height: desktop.height)
+        } else {
+            size = displays.glassesPixelSize
+        }
         setStatus(String(format: "Running — %.0f×%.0f @ %d Hz",
                          size.width, size.height, frameRate))
         startRateTimer()
