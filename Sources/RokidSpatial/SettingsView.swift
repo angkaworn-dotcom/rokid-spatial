@@ -185,12 +185,6 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if controller.virtualResolution == .r1920x1200hi {
-                    Text("1920×1200 rendered at 2× (3840×2400) and downscaled onto the panel — sharper text, ~4× capture load. If it stutters, drop back to 1920×1200.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
                 Toggle("Work in the glasses", isOn: $controller.virtualIsMain)
                     .font(.caption)
                     .disabled(controller.isRunning)

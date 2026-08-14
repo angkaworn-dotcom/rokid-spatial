@@ -12,21 +12,19 @@ eye burning almost completely gone).
 
 ## Image quality (Mac)
 
-1. **HiDPI supersampled desktop** — the only idea on the list that adds
-   *real* detail rather than massaging what exists. Create the working
-   virtual display as HiDPI (1920×1200 points = 3840×2400 px backing), so
-   macOS renders text at 2× and our Catmull-Rom minifies it 2:1 onto the
-   panel — the same reason Retina screenshots downscale so well.
-   - Plumbing exists: `VirtualDisplay.create(hiDPI:)` already doubles the
-     backing; the stereo modes already capture a working virtual display.
-   - **Trap, found in advance:** `ScreenCapture.start` caps capture width
-     at 3008 px (`capWidth`) — a 3840 px desktop would be silently
-     downscaled back, erasing the whole point. Raise the cap for this
-     experiment.
-   - Risk: 4× capture bandwidth through WindowServer — the same choke
-     point behind the LPM clamp and heavy-load drops. **Measure fps
-     first**, verdict by eye second. Cheapest testbed: 2nd-desktop source
-     with a hiDPI 1920×1200 option, before touching glasses-only.
+1. **HiDPI supersampled desktop** — 1920×1200 points on a 3840×2400 px
+   backing, so macOS renders text at 2× and our Catmull-Rom minifies it
+   2:1 onto the panel. **CLOSED 2026-08-15 — rejected by the user before
+   a perceptual test.** The plumbing shipped and was removed the same day
+   (UI only; the `maxWidth:` capture parameter and the capture-size log
+   line remain, `8cb44af`). Grounds: overkill for the daily driver, the
+   sixth picker segment overflowed the Settings window, and the
+   2nd-desktop mode's arrange-windows-by-hand friction. The fps drop
+   initially blamed on it was measured to be build/compile load (see
+   RESEARCH.md) — the 2× path never ran. To retry: re-add a
+   `r1920x1200hi` case — the capture path is ready, including the trap
+   found in advance (the old 3008 px `capWidth` would have silently
+   downscaled 3840 back and erased the whole point).
 2. **MetalFX Spatial (or FSR/EASU) for magnification** — edge-directed
    upscaling, visibly better than Catmull-Rom when a small virtual
    desktop is blown up onto the panel. Irrelevant at 1:1, so it only
@@ -129,5 +127,8 @@ Feature parity checklist for a first Windows release, in order:
   closed (RESEARCH.md).
 - Temporal supersampling at 1:1: rejected by eye; mirror-mode re-test is
   the only open thread.
+- HiDPI supersampling of the 2nd desktop: rejected by the user
+  2026-08-15 (untested by eye; overkill + 2nd-desktop UX friction). The
+  capture path keeps `maxWidth:` ready if ever revisited.
 - Background themes: not worth it on birdbath optics — any non-black
   background is stray light in the eye.

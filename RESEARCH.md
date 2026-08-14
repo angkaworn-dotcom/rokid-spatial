@@ -308,3 +308,62 @@ image, which reads as กระตุก. VSync off → judder gone → user pus
 Sharpen to 1.0 and kept it. Standing advice now in the caption: leave
 Adaptive VSync off unless frames are actually being dropped — at a
 steady 60/0 it is pure downside on this panel.
+
+## The supersampling experiment that never ran (2026-08-15)
+
+ROADMAP item 1 was the one image-quality idea that adds *real* detail
+instead of massaging what exists: build the 2nd desktop at 1920×1200
+points on a 3840×2400 px Retina backing, let macOS render text at 2×,
+and let our Catmull-Rom minify it 2:1 onto the panel. The trap was found
+before it could bite — `ScreenCapture.start` capped capture width at
+3008 px, so a 3840 px desktop would have been silently downscaled back
+and the experiment would have measured nothing. Two commits shipped in
+three minutes: the cap became a `maxWidth:` parameter with a
+capture-size log line (`8cb44af`), then a `r1920x1200hi` case, a
+`captureMaxWidth` that lifts the cap only for a hiDPI virtual desktop,
+and a sixth segment in the Desktop-size picker (`55c18fb`).
+
+Then the pacing log fell off a cliff (times below are the log's UTC
+stamps, dated 2026-08-14 — the small hours of the 15th locally, UTC+7,
+minutes after the two commits landed). Steady
+60/0 through 17:39:16Z,
+then 41 fps (136 slow), 49, and a fourteen-minute floor of 30-38 fps with
+230-300 slow frames per 10 s window, bottoming at a flat 30/300 — the
+signature of every frame missing its flip. Low Power Mode was off, the
+machine was on AC, and the app log is silent through the whole stretch:
+no capture restart, no mode change, no error. The user blamed the new
+option.
+
+**The 2× path never ran.** There is no 3840×2400 capture line anywhere in
+the log — the only `capture:` lines that session read 1920×1080 @ 60 Hz
+from display 2, the plain glasses mirror. What actually starved
+WindowServer was the machine itself: the Task-2 build compiling
+alongside several Claude helper processes, exactly the choke point the
+roadmap named as the *risk* of the experiment, arriving on its own. The
+precursors say the same thing more precisely — 71 and 78 fps *avg* at
+17:10:48Z and 17:13:11Z, over-60 averages on a 60 Hz panel, which is
+arithmetically impossible unless the 10 s pacing timer itself was late;
+the sampler was being starved before the renderer was. When the load
+ended the session came back to 55-59 and then a clean 59-60.
+
+**Verdict, verbatim:** "จริงๆ คิดว่าอาจจะเกินจำเป็นนะ ทำให้เฟรมตกโดยใช่เหตุด้วย
+โหมดนี้ไม่เวิร์ค" — overkill, drops frames for no reason, this mode
+doesn't work. The frame-drop half of that is wrong on the evidence
+above, and it is the second time in two days that a bystander nearly
+took the blame for something else (Sharpen was the first, exonerated
+when Adaptive VSync turned out to be the tear source). But the rest of
+the verdict stands on its own and the option is gone: overkill for a
+daily driver that is plain 60 Hz mirror; the sixth picker segment made
+the Settings window content overflow and clip (five segments fit, six
+did not — seen in the user's screenshot); and the 2nd-desktop mode
+itself carries the friction of arranging every window onto an empty
+desktop by hand, which no amount of extra sharpness repays.
+
+Two lessons worth keeping. **Measure before you accuse** — a feature
+that has never executed cannot be the cause, and the capture-size log
+line added for this experiment is what settled it in one grep; it stays,
+along with the `maxWidth:` parameter (default 3008), so a future retry
+is a single enum case away. And a UI one: **the segmented Desktop-size
+picker is at capacity.** Five options fit the Settings window; a sixth
+overflows it. Any further resolution needs a different control — a
+menu, or a separate "2×" toggle beside the picker — not another segment.
