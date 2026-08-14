@@ -52,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Useful while iterating: skips the manual Start click so a rebuild
         // can be launched and inspected in one step. `--source=` picks the
-        // capture source by raw value (mirror, virtualDesktop, glassesOnly).
+        // capture source by raw value (mirror, glassesOnly).
         if let flag = CommandLine.arguments.first(where: { $0.hasPrefix("--source=") }),
            let source = SpatialController.CaptureSource(
                rawValue: String(flag.dropFirst("--source=".count))) {

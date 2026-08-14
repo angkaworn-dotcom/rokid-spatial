@@ -31,11 +31,10 @@ final class SpatialController: ObservableObject {
     /// for an app to opt out.
     @Published var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
 
-    @Published var virtualResolution: VirtualResolution = .r1440x900 { didSet { persist(virtualResolution.rawValue, "virtualResolution") } }
-
-    /// Put the menu bar on the virtual desktop, so the glasses become the
-    /// place you work rather than an empty screen off to one side.
-    @Published var virtualIsMain = true { didSet { persist(virtualIsMain, "virtualIsMain") } }
+    /// Ultra-Wide 21:9: glasses-only works on one panoramic 2560×1080
+    /// desktop instead of the panel-native one. Replaces the side screens
+    /// (SpaceWalker's own concept — one wide desktop, not a wall of three).
+    @Published var ultraWide = false { didSet { persist(ultraWide, "ultraWide") } }
 
     @Published var source: CaptureSource = .mirror { didSet { persist(source.rawValue, "source") } }
 
@@ -253,6 +252,14 @@ final class SpatialController: ObservableObject {
     /// True for the stereo variants: per-eye rendering off a separate
     /// working virtual display. 120 Hz is standalone but not stereo.
     var stereoActive: Bool { standaloneActive && sbsMode.isStereo }
+
+    /// Ultra-wide runs the SBS-60 arrangement shape without the stereo
+    /// panel: a working virtual desktop is the wall main, the built-in
+    /// mirrors it, and the glasses display shows only the overlay.
+    var ultraWideActive: Bool { source == .glassesOnly && sbsMode == .off && ultraWide }
+    /// True whenever the desktop being captured is a virtual display we
+    /// created rather than a physical one.
+    var workingDesktopActive: Bool { stereoActive || ultraWideActive }
     @Published var motionLock: Float = 0 { didSet { screen.motionLock = motionLock; persist(motionLock, "motionLock") } }
     /// Angular gap between neighbouring screens, degrees. Zero makes the
     /// three screens one continuous wall.
@@ -291,11 +298,10 @@ final class SpatialController: ObservableObject {
     /// Mirroring is the obvious thing to want — your actual work, floating in
     /// front of you — and it costs sharpness, because a full-size desktop has
     /// to be squeezed into however many panel pixels the virtual screen spans.
-    /// A separate desktop can be sized to fit exactly, so nothing is
-    /// downscaled, but it starts empty and windows have to be moved onto it.
+    /// Glasses-only avoids that entirely: the desktop lives in the glasses at
+    /// a size the panel can resolve, and the MacBook screen goes dark.
     enum CaptureSource: String, CaseIterable, Identifiable {
         case mirror
-        case virtualDesktop
         case glassesOnly
 
         var id: String { rawValue }
@@ -303,7 +309,6 @@ final class SpatialController: ObservableObject {
         var label: String {
             switch self {
             case .mirror: return "Mirror Mac"
-            case .virtualDesktop: return "2nd desktop"
             case .glassesOnly: return "Glasses only"
             }
         }
@@ -312,46 +317,10 @@ final class SpatialController: ObservableObject {
             switch self {
             case .mirror:
                 return "Shows your MacBook screen. Sharpness depends on its resolution — lower it, or enlarge the virtual screen, if text looks soft."
-            case .virtualDesktop:
-                return "A second desktop sized to the glasses, so text is never downscaled. It starts empty; move windows onto it."
             case .glassesOnly:
                 return "The whole desktop lives in the glasses at panel-native size; the MacBook screen goes dark. One screen — nothing to lose windows on, no display fights."
             }
         }
-    }
-
-    /// Resolutions for the virtual desktop. Each is a compromise between how
-    /// much fits on screen and how sharp it is: the virtual screen spans a
-    /// fixed number of panel pixels, so a wider desktop squeezed into it means
-    /// smaller, softer text.
-    enum VirtualResolution: String, CaseIterable, Identifiable {
-        case r1280x800
-        case r1440x900
-        case r1600x1000
-        case r1920x1200
-        /// SpaceWalker's Ultra-Wide: one 21:9 desktop instead of a wall of
-        /// three. Best with the curved screen — a flat 21:9 at working
-        /// distance leaves the edges visibly further away than the centre.
-        case r2560x1080
-
-        var id: String { rawValue }
-
-        var width: Int {
-            switch self {
-            case .r1280x800: return 1280
-            case .r1440x900: return 1440
-            case .r1600x1000: return 1600
-            case .r1920x1200: return 1920
-            case .r2560x1080: return 2560
-            }
-        }
-
-        var height: Int { self == .r2560x1080 ? 1080 : width * 5 / 8 }
-        var label: String { self == .r2560x1080 ? "21:9" : "\(width)×\(height)" }
-
-        /// Retina backing is worth the pixels once the desktop is small enough
-        /// that the virtual screen renders larger than its point size.
-        var hiDPI: Bool { self == .r1280x800 || self == .r1440x900 }
     }
 
     private var imu: RokidIMU?
@@ -490,10 +459,7 @@ final class SpatialController: ObservableObject {
         let d = UserDefaults.standard
         if let v = CaptureSource(rawValue: d.string(forKey: "source") ?? "") { source = v }
         if let v = AnchorMode(rawValue: d.string(forKey: "anchorMode") ?? "") { mode = v }
-        if let v = VirtualResolution(rawValue: d.string(forKey: "virtualResolution") ?? "") {
-            virtualResolution = v
-        }
-        if d.object(forKey: "virtualIsMain") != nil { virtualIsMain = d.bool(forKey: "virtualIsMain") }
+        if d.object(forKey: "ultraWide") != nil { ultraWide = d.bool(forKey: "ultraWide") }
         if d.object(forKey: "doubleTapRecenter") != nil { doubleTapRecenter = d.bool(forKey: "doubleTapRecenter") }
         if d.object(forKey: "curved") != nil { curved = d.bool(forKey: "curved") }
         if d.object(forKey: "antiMoire") != nil { antiMoire = d.bool(forKey: "antiMoire") }
@@ -625,10 +591,9 @@ final class SpatialController: ObservableObject {
         let captureID: CGDirectDisplayID?
         switch source {
         case .mirror: captureID = displays.deskDisplayID
-        case .virtualDesktop: captureID = virtualDisplay.displayID
         case .glassesOnly:
-            captureID = stereoActive ? virtualDisplay.displayID
-                                     : displays.glassesDisplayID
+            captureID = workingDesktopActive ? virtualDisplay.displayID
+                                             : displays.glassesDisplayID
         }
         guard let captureID else { return }
         Task {
@@ -725,9 +690,9 @@ final class SpatialController: ObservableObject {
         // The stereo variants' working desktop obeys the same rule: create
         // first, fight once. (120 Hz captures the glasses' own desktop and
         // needs no extra display.)
-        if source == .virtualDesktop || stereoActive {
+        if workingDesktopActive {
             setStatus(stereoActive ? "Creating the \(frameRate) Hz working desktop…"
-                                   : "Creating the virtual desktop…")
+                                   : "Creating the Ultra-Wide desktop…")
             do {
                 if stereoActive {
                     // The size matches the per-eye panel raster exactly, and
@@ -739,11 +704,12 @@ final class SpatialController: ObservableObject {
                                               hiDPI: false,
                                               refreshRate: Double(frameRate))
                 } else {
-                    try virtualDisplay.create(
-                        width: virtualResolution.width,
-                        height: virtualResolution.height,
-                        hiDPI: virtualResolution.hiDPI
-                    )
+                    // SpaceWalker's Ultra-Wide: one 21:9 desktop instead of
+                    // a wall of three. Best with the curved screen — a flat
+                    // 21:9 at working distance leaves the edges visibly
+                    // further away than the centre.
+                    try virtualDisplay.create(width: 2560, height: 1080,
+                                              hiDPI: false, refreshRate: 60)
                 }
             } catch {
                 setStatus("\(error)", isError: true)
@@ -785,7 +751,7 @@ final class SpatialController: ObservableObject {
         // what the glasses can resolve, so nothing is downscaled on the way to
         // your eye, and the physical desktop is left completely alone.
         let captureID: CGDirectDisplayID
-        if stereoActive {
+        if workingDesktopActive {
             // The SBS panel modes' own desktops are wide slivers (1920×600
             // or ×540 points) and unusable as a workspace; the user works on
             // the matching-rate virtual display and the overlay projects it
@@ -804,12 +770,6 @@ final class SpatialController: ObservableObject {
                     return
                 }
                 captureID = deskID
-            case .virtualDesktop:
-                guard let id = virtualDisplay.displayID else {
-                    abort("The virtual display did not report a display ID.")
-                    return
-                }
-                captureID = id
             case .glassesOnly:
                 // Capture the glasses' own display — the overlay is excluded
                 // from the capture per-window, which breaks the recursion.
@@ -841,7 +801,10 @@ final class SpatialController: ObservableObject {
             let sideSize = (!standaloneActive && sideLayout == .portrait)
                 ? (width: effective.height, height: effective.width)
                 : effective
-            for index in sideScreens.indices {
+            // Ultra-wide replaces the side screens with one wide desktop —
+            // creating them anyway would put a second wall behind it.
+            let sideIndices = ultraWideActive ? [] : sideScreens.indices
+            for index in sideIndices {
                 do {
                     // Match the panel's rate: a 60 Hz virtual display in the
                     // set drags the whole composition back down to ~60-90
@@ -858,7 +821,7 @@ final class SpatialController: ObservableObject {
             // Let the window server enumerate them before capture, then push
             // the main desktop's size back — creating displays makes macOS
             // re-apply the mode it remembers, undoing the chosen size.
-            if !sideScreens.indices.isEmpty {
+            if !sideIndices.isEmpty {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 await Task.detached { [displays] in
                     displays.reapplyDesktopSize()
@@ -1182,11 +1145,7 @@ final class SpatialController: ObservableObject {
     private func applyArrangement() {
         guard let deskID = displays.deskDisplayID,
               let glassesID = displays.glassesDisplayID else { return }
-        let virtualID = source == .virtualDesktop ? virtualDisplay.displayID : nil
-        let main = (virtualIsMain ? virtualID : nil) ?? deskID
-        var rest = [virtualID, deskID].compactMap { $0 }.filter { $0 != main }
-        rest.append(glassesID)
-        try? displays.arrange(main: main, then: rest)
+        try? displays.arrange(main: deskID, then: [glassesID])
     }
 
     func stop() {
@@ -1244,10 +1203,9 @@ final class SpatialController: ObservableObject {
             let captureID: CGDirectDisplayID?
             switch self.source {
             case .mirror: captureID = self.displays.deskDisplayID
-            case .virtualDesktop: captureID = self.virtualDisplay.displayID
             case .glassesOnly:
-                captureID = self.stereoActive ? self.virtualDisplay.displayID
-                                              : self.displays.glassesDisplayID
+                captureID = self.workingDesktopActive ? self.virtualDisplay.displayID
+                                                      : self.displays.glassesDisplayID
             }
             guard let captureID else { return }  // the watchdog handles this
             do {
