@@ -169,15 +169,6 @@ struct SettingsView: View {
             }
 
             if controller.source == .glassesOnly {
-                Toggle("Ultra-Wide 21:9", isOn: $controller.ultraWide)
-                    .font(.caption)
-                    .disabled(controller.isRunning || controller.sbsMode != .off)
-                if controller.ultraWide {
-                    Text("One panoramic 2560×1080 desktop — replaces the side screens. Turn on Curved screen so the edges stay the same distance as the centre.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
                 labelled("Side screens") {
                     Picker("", selection: $controller.sideScreens) {
                         ForEach(SpatialController.SideScreens.allCases) { sides in
@@ -186,13 +177,7 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .disabled(controller.isRunning || controller.ultraWide)
-                }
-                if controller.ultraWide {
-                    Text("Side screens are replaced by the Ultra-Wide desktop — turn 21:9 off to use them.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    .disabled(controller.isRunning)
                 }
                 // Always visible, greyed until side screens are on — a row
                 // that only appears after another picker changes is a row

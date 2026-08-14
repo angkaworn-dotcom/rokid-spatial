@@ -327,7 +327,7 @@ final class DisplayManager {
         // (16:9, same shape as the 60 Hz daily driver) on the panel's
         // 1920×1200 raster.
         setDesktopResolution(glassesID, width: 1920,
-                             height: mode == .highRefreshRate || mode == .sameOnBoth ? 1080
+                             height: mode == .highRefreshRate ? 1080
                                    : mode == .highRefreshRateSBS ? 600 : 540)
         if let current = CGDisplayCopyDisplayMode(glassesID) {
             glassesDesktopSize = (current.width, current.height)

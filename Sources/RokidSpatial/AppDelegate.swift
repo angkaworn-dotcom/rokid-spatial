@@ -69,11 +69,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if CommandLine.arguments.contains("--sbs=120") {
             controller.sbsMode = .hz120
         }
-        // `--ultrawide` opts a plain glasses-only session into the 21:9
-        // working desktop: `--source=glassesOnly --ultrawide --autostart`.
-        if CommandLine.arguments.contains("--ultrawide") {
-            controller.ultraWide = true
-        }
         // `--hud` overlays the Metal Performance HUD on the glasses layer —
         // the Direct-vs-Composited readout the direct-scanout work steers by.
         if CommandLine.arguments.contains("--hud") {
