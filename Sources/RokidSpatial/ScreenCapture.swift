@@ -44,7 +44,8 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// from the one place the user can still see it.
     func start(displayID: CGDirectDisplayID, frameRate: Int,
                excludingWindowNumber: Int? = nil,
-               showsCursor: Bool = true) async throws {
+               showsCursor: Bool = true,
+               maxWidth: Int = 3008) async throws {
         var content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true
         )
@@ -91,15 +92,19 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
         // Capture at the display's true pixel size so text stays crisp once
         // it is projected, but cap it — beyond this we are paying for detail
-        // the 50° field of view cannot resolve anyway.
+        // the 50° field of view cannot resolve anyway. The hiDPI virtual
+        // desktop raises the cap: its 2× backing exists precisely to be
+        // captured whole and minified by the renderer.
         let mode = CGDisplayCopyDisplayMode(displayID)
         let nativeWidth = mode?.pixelWidth ?? Int(CGDisplayPixelsWide(displayID))
         let nativeHeight = mode?.pixelHeight ?? Int(CGDisplayPixelsHigh(displayID))
-        let capWidth = 3008
-        let scale = nativeWidth > capWidth ? Double(capWidth) / Double(nativeWidth) : 1
+        let scale = nativeWidth > maxWidth ? Double(maxWidth) / Double(nativeWidth) : 1
         pixelWidth = Int(Double(nativeWidth) * scale)
         pixelHeight = Int(Double(nativeHeight) * scale)
         pointWidth = Int(CGDisplayPixelsWide(displayID))
+        AppLog.append("capture: \(pixelWidth)×\(pixelHeight) px"
+            + (scale < 1 ? " (capped from \(nativeWidth)×\(nativeHeight))" : "")
+            + " @ \(frameRate) Hz from display \(displayID)")
 
         let config = SCStreamConfiguration()
         config.width = pixelWidth
