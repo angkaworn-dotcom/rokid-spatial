@@ -83,12 +83,17 @@ eye burning almost completely gone).
     "Displays have separate Spaces" **disabled**
     (`com.apple.spaces spans-displays` = 1), any native fullscreen
     blacks out every *other* display at the WindowServer level,
-    including the glasses under our overlay. Not an app bug — a user
-    setting plus a logout. With the setting flipped, fullscreen on
-    Ultra-Wide is expected to work; **verification pending** — verify by
-    eye after re-login. If confirmed, the theater-mode (`t`) workaround
-    is no longer needed. The cheap v1 is still a preset (big anchored
-    curved screen, sides off). Ask which scope when resumed.
+    including the glasses under our overlay. Understood — but the
+    setting flip is **REJECTED by the user** (2026-08-15): separate
+    Spaces breaks the 3-screen side-screen wall (no window straddling,
+    per-display menu bars). Do not re-suggest it. So the live workaround
+    stays: YouTube theater mode (`t`) + a maximized window on
+    Ultra-Wide. The real path forward is **Cinema mode v2 —
+    per-window capture** of the video window
+    (`SCContentFilter(desktopIndependentWindow:)`) rendered as one big
+    curved screen: immune to Spaces, to fullscreen, and to the setting
+    entirely. The cheap v1 preset (big anchored curved screen, sides
+    off) still stands. Ask which scope when resumed.
 
 ## Windows port — the plan (companion to [PORTING.md](PORTING.md))
 
@@ -153,10 +158,11 @@ Feature parity checklist for a first Windows release, in order:
   what overflowed the Settings window. Its one keeper, Ultra-Wide 21:9,
   is a Glasses-only toggle now. Do not reintroduce the source to bring
   back a resolution option.
-- "Displays have separate Spaces" must be ON for any virtual-display
-  session: with it off, macOS blacks out every other display during a
-  native fullscreen, glasses included. A machine setting, not something
-  the app can work around (diagnosed 2026-08-15; user re-login pending).
+- "Displays have separate Spaces": stays OFF on this machine — the user
+  vetoed enabling it (it breaks the 3-screen wall: no window
+  straddling, per-display menu bars). Fullscreen video on
+  virtual-display sources therefore stays black by OS design; the
+  answer is per-window capture (Cinema v2), not the setting.
 - 21:9 at the signal level: impossible on macOS — the panel's EDID and
   macOS scaled modes top out at 16:9 1920×1080 (probed 2026-08-15).
   Ultra-Wide lives on a virtual display; EDID overrides are the Windows

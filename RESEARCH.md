@@ -516,3 +516,17 @@ Had the glasses-display screenshot been taken on night one, layer 2
 would have been named in a minute — and layer 1, a genuine bug worth
 fixing on its own merits, would still have been sitting there,
 undiscovered, waiting for the day the setting was flipped.
+
+**Addendum, 2026-08-15 (later): the setting will not be flipped.** The
+user vetoed it, and the reason is good enough to close the question:
+"Displays have separate Spaces" is off on this machine *on purpose*,
+because turning it on breaks the 3-screen side-screen wall — windows can
+no longer straddle displays, and every display grows its own menu bar.
+The wall is the daily driver; a video workaround is not worth taxing it.
+The design consequence is therefore permanent: on this machine, native
+fullscreen on a virtual-display source is black by OS design, and no app
+change reaches it. The remaining route to fullscreen-like video on
+Ultra-Wide is **per-window capture** — an `SCContentFilter`
+`desktopIndependentWindow` on the video window itself, drawn as a big
+curved screen, which never involves a fullscreen Space at all. Until
+that exists, theater mode (`t`) plus a maximized window is the answer.
