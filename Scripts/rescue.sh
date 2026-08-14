@@ -7,7 +7,9 @@
 #
 # The overlay window dies with the process, so killing the app is what
 # actually gives you the screen back. Resetting the panel mode afterwards is
-# what stops the glasses showing a stretched or side-by-side image.
+# what stops the glasses showing a stretched or side-by-side image. Mirroring
+# the glasses back onto the built-in screen at the end is what stops you being
+# left with two displays showing different things.
 
 cd "$(dirname "$0")/.."
 
@@ -74,6 +76,20 @@ if let builtin = ids.first(where: { CGDisplayIsBuiltin($0) != 0 }) {
     CGCompleteDisplayConfiguration(config, .forSession)
 }
 EOF
+
+# The loop above only fights macOS off; it leaves the arrangement extended,
+# which is its own broken state — glasses and built-in showing different
+# things, and nothing running that could fix it. So finish the job: mirror the
+# glasses back onto the built-in screen. Twice, with a pause, in case a late
+# re-apply lands between the two.
+if [ -x .build/remirror-displays ]; then
+    .build/remirror-displays
+    sleep 3
+    .build/remirror-displays
+else
+    echo "remirror-displays not built — mirror the glasses in System Settings → Displays"
+    echo "  (build it with: swiftc -O -o .build/remirror-displays Tools/remirror-displays.swift)"
+fi
 
 echo
 echo "Rescued. If the glasses still look wrong, unplug and replug them."

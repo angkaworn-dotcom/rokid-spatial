@@ -231,12 +231,20 @@ Then:
 ./Scripts/make-app.sh
 ```
 
-The display-mode tool is plain C and builds separately:
+The two standalone tools in `Tools/` build separately. The display-mode tool
+is plain C:
 
 ```bash
 clang -O2 -o .build/rokid-display-mode Tools/rokid-display-mode.c \
   -I/opt/homebrew/opt/libusb/include/libusb-1.0 \
   -L/opt/homebrew/opt/libusb/lib -lusb-1.0
+```
+
+And the re-mirror tool `Scripts/rescue.sh` calls at the end, which puts the
+glasses back to mirroring the built-in screen, is a single Swift file:
+
+```bash
+swiftc -O -o .build/remirror-displays Tools/remirror-displays.swift
 ```
 
 ## Usage
