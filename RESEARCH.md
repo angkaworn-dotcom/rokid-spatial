@@ -290,3 +290,12 @@ Also decoded from SpaceWalker's binary during this pass: its "Adaptive
 VSync" is `CAMetalLayer.setDisplaySyncEnabled:` (ours now has the same
 toggle); its "Reduce Motion Blur" traces only to a stored preference —
 consumer unknown — and our `motionLock` already chases that goal.
+
+**Sharpen verdict (2026-08-15): rejected at 0.35 by eye — "ภาพกระตุก
+เวลาหันหัว".** Static text pops, but under head rotation the desktop
+crosses sub-pixel offsets every frame and sharpening amplifies the
+resulting crawl into visible judder. Slider stays (default 0). If
+sharpening is ever revisited, gate it by angular velocity — full
+strength only while the head is still, fading to zero during turns
+(the same insight as motionLock, applied to the kernel instead of the
+anchor).
