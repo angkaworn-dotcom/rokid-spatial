@@ -10,7 +10,7 @@ builds the missing piece.
 
 ## What it does
 
-There are three things it can show, chosen with the **Show** picker:
+There are two things it can show, chosen with the **Show** picker:
 
 **Glasses only** — the recommended one. There is exactly one desktop, it lives
 on the glasses' own 1920×1200 display, and the MacBook screen goes dark.
@@ -30,10 +30,19 @@ of the size the text was drawn for. Lower the Mac's resolution or enlarge the
 virtual screen until the sharpness readout reaches 1.0. Requires an extended
 (un-mirrored) arrangement, with everything that entails.
 
-**Separate desktop** — a second desktop created at a resolution matched to the
-glasses, so nothing is downscaled at all; this measured **1.23×** against
-0.74× for mirroring. It starts empty, so windows have to be moved onto it, and
-that is the whole trade: sharper, but not your existing screen.
+A third source, **Separate desktop** — an empty second desktop sized to the
+glasses — existed until 2026-08-15 and is retired. It measured sharper than
+mirroring (1.23× against 0.74×), but every session began with dragging windows
+onto an empty screen by hand, and no amount of sharpness repaid that. Its one
+keeper survives as a glasses-only option:
+
+**Ultra-Wide 21:9** — a toggle under **Glasses only**. The session works on one
+panoramic 2560×1080 desktop instead of the three-screen wall: a virtual display
+becomes the main screen, the built-in mirrors it, and the glasses show only the
+overlay. Windows you already had follow you in, because the MacBook desktop is
+merged rather than hidden. Best paired with **Curved screen**, so the edges sit
+the same distance away as the centre. 21:9 is only available this way — the
+panel's own EDID has no wide modes (see RESEARCH.md).
 
 ### Glasses-only mode: the fine print
 
@@ -123,10 +132,11 @@ launches.
 What starting does depends on the mode. **Glasses only** switches the panel
 mode, leaves mirroring exactly as macOS wants it, and dims the built-in
 screen; quitting restores brightness and puts the panel back to 2D, and that
-is the whole story. The two extended modes additionally un-mirror and
+is the whole story. **Mirror Mac** — and the glasses-only variants that build a
+working virtual desktop, SBS and Ultra-Wide — additionally un-mirror and
 rearrange the displays, and restore them on quit.
 
-Two things are deliberately *not* restored on exit from the extended modes,
+Two things are deliberately *not* restored on exit from those arrangements,
 both learned the hard way:
 
 - **Mirroring is never re-enabled.** The glasses normally arrive as the mirror

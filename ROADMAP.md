@@ -19,17 +19,22 @@ eye burning almost completely gone).
    (UI only; the `maxWidth:` capture parameter and the capture-size log
    line remain, `8cb44af`). Grounds: overkill for the daily driver, the
    sixth picker segment overflowed the Settings window, and the
-   2nd-desktop mode's arrange-windows-by-hand friction. The fps drop
+   2nd-desktop mode's arrange-windows-by-hand friction (that source has
+   since been retired outright, 2026-08-15). The fps drop
    initially blamed on it was measured to be build/compile load (see
    RESEARCH.md) — the 2× path never ran. To retry: re-add a
    `r1920x1200hi` case — the capture path is ready, including the trap
    found in advance (the old 3008 px `capWidth` would have silently
    downscaled 3840 back and erased the whole point).
 2. **MetalFX Spatial (or FSR/EASU) for magnification** — edge-directed
-   upscaling, visibly better than Catmull-Rom when a small virtual
-   desktop is blown up onto the panel. Irrelevant at 1:1, so it only
-   helps the small 2nd-desktop sizes. MetalFX is in the OS; wiring is
-   modest.
+   upscaling, visibly better than Catmull-Rom when a virtual desktop is
+   blown up onto the panel. **Re-scoped 2026-08-15:** the stated use
+   case was the small 2nd-desktop sizes, and that source is retired. The
+   one magnifying case left is Ultra-Wide — 2560 px of desktop across a
+   1920 px panel is *minification*, not magnification, until the user
+   zooms in past 1:1, which they habitually do. Worth doing only if
+   zoomed-in Ultra-Wide text is judged soft by eye; otherwise closed for
+   lack of a use case.
 3. **RCAS instead of the clamped unsharp mask** — per-pixel adaptive
    sharpening strength. Principled, but the visible delta over the
    current slider is small. Do only if sharpening artefacts ever annoy.
@@ -68,9 +73,14 @@ eye burning almost completely gone).
     Smooth Follow + roll lock · Lying flat: pitch+yaw+roll locks), each
     a hotkey.
 13. **Cinema mode** — PARKED by the user ("เดี๋ยวค่อยทำ"). The crux is
-    SCK's inability to capture native fullscreen video; the cheap v1 is
-    a preset (big anchored curved screen, sides off). Ask which scope
-    when resumed.
+    fullscreen video capture, stated precisely (corrected 2026-08-15):
+    native fullscreen fails on the **virtual-display** sources — the
+    image disappears, observed on Ultra-Wide — while plain glasses-only
+    fullscreen, which captures the physical display, works fine. Root
+    cause on virtual displays is undiagnosed; the live workaround that
+    keeps 21:9 is YouTube theater mode (`t`) with a maximized window.
+    The cheap v1 is still a preset (big anchored curved screen, sides
+    off). Ask which scope when resumed.
 
 ## Windows port — the plan (companion to [PORTING.md](PORTING.md))
 
@@ -130,5 +140,14 @@ Feature parity checklist for a first Windows release, in order:
 - HiDPI supersampling of the 2nd desktop: rejected by the user
   2026-08-15 (untested by eye; overkill + 2nd-desktop UX friction). The
   capture path keeps `maxWidth:` ready if ever revisited.
+- The 2nd-desktop capture source itself: retired 2026-08-15 — arranging
+  windows by hand every session was never repaid, and its picker was
+  what overflowed the Settings window. Its one keeper, Ultra-Wide 21:9,
+  is a Glasses-only toggle now. Do not reintroduce the source to bring
+  back a resolution option.
+- 21:9 at the signal level: impossible on macOS — the panel's EDID and
+  macOS scaled modes top out at 16:9 1920×1080 (probed 2026-08-15).
+  Ultra-Wide lives on a virtual display; EDID overrides are the Windows
+  port's territory.
 - Background themes: not worth it on birdbath optics — any non-black
   background is stray light in the eye.

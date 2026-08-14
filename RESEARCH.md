@@ -367,3 +367,67 @@ is a single enum case away. And a UI one: **the segmented Desktop-size
 picker is at capacity.** Five options fit the Settings window; a sixth
 overflows it. Any further resolution needs a different control — a
 menu, or a separate "2×" toggle beside the picker — not another segment.
+
+## Ultra-Wide 21:9 moves in, the 2nd desktop moves out (2026-08-15)
+
+The 2nd-desktop capture source is gone. It had been the sharpest option
+on paper — a virtual desktop matched to the panel, nothing downscaled —
+and in practice every session opened with the same chore: drag each
+window onto an empty screen by hand. Its picker was also the thing that
+overflowed the Settings window during the supersampling episode above.
+So the source was retired and its single keeper was carried across:
+**Ultra-Wide 21:9 is now a toggle inside Glasses-only** (`14774f7`,
+`c5792b4`, `cf52c9a`; spec and plan under `docs/superpowers/`).
+
+The mechanism is SBS-60's arrangement shape with the stereo panel left
+out. A 2560×1080 @ 60 Hz virtual display is created and made the wall
+main; the glasses' own display is parked showing nothing but the
+overlay; the built-in is mirror-slaved to the working display, so the
+laptop shows what the glasses show and windows opened before Start
+follow you in instead of being stranded. The side screens are suppressed
+— the wide desktop *is* the wall. The watchdog was taught to defend that
+arrangement rather than fight it, which is the whole difference between
+this and a display-config tug of war.
+
+Measured live, first real session (log stamps are UTC, 2026-08-14T19:0x,
+which is the small hours of the 15th locally):
+`capture: 2560×1080 px @ 60 Hz from display 234` — a real virtual
+display, at the size on the tin. The watchdog settled in about 15 s (one
+one-shot dock bounce, then window rescues for Safari, Claude, LINE and
+Finder) and then went completely quiet for a 65 s watch window. Pacing
+locked at 60 fps, 0 slow frames, on AC. No errors anywhere in the log.
+
+**Signal-level 21:9 is closed.** Before settling for a virtual display,
+the panel itself was asked: `CGDisplayCopyAllDisplayModes` with
+`kCGDisplayShowDuplicateLowResolutionModes` against the glasses (vendor
+`0x3054`, model `0x4753`) returns 21 modes, every one of them 16:9 or
+4:3, none wider than aspect 1.78, topping out at 1920×1080. There is no
+2560×1080 to select, and macOS offers no way to synthesise one. On this
+platform 21:9 exists only as a virtual display. EDID overrides — the
+CRU-style route that would make the panel itself claim a wide timing —
+remain a Windows-port topic, as ROADMAP already says.
+
+**One open thread: fullscreen video on a virtual display.** With the
+capture source set to the Ultra-Wide desktop, putting a video into
+native fullscreen makes the image disappear. Plain glasses-only
+fullscreen — which captures the physical display — works. That is the
+observation; the root cause on virtual displays is not diagnosed, and
+nothing here should be read as a theory. The workaround that keeps 21:9
+is YouTube's theater mode (`t`) with a maximized window; the alternative
+is to watch in plain glasses-only. This also corrects ROADMAP item 13,
+which had stated the crux as SCK's inability to capture native
+fullscreen video *at all* — the blanket form is wrong, and the item now
+carries the precise one.
+
+Also fixed on the way out: the status line read
+`displays.glassesPixelSize` unconditionally, so an Ultra-Wide session
+streaming 2560×1080 announced itself as "Running — 1920×1080 @ 60 Hz".
+Working-desktop sessions now report the desktop they actually capture.
+
+**Verdict: KEEP.** The obvious objection to a 21:9 screen is that 16:9
+video letterboxes on it, and the user waved it off — verbatim: "ยังไงเราก็
+ปรับ zoom เข้าออกอยู่แล้วไง แล้วก็หายซ้ายขวาได้อยู่แล้ว ถึงขนาดจะเลยจอ แต่ก็หันได้"
+— they zoom the virtual screen in and out as a matter of course, and
+they turn their head left and right, even past the edge of the FOV. A
+fixed frame is a desktop-monitor problem; in a headset the frame moves
+with you.
