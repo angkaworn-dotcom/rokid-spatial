@@ -72,15 +72,23 @@ eye burning almost completely gone).
 12. **Presets** — one-click bundles (Desk: Anchored + sides · Sofa:
     Smooth Follow + roll lock · Lying flat: pitch+yaw+roll locks), each
     a hotkey.
-13. **Cinema mode** — PARKED by the user ("เดี๋ยวค่อยทำ"). The crux is
-    fullscreen video capture, stated precisely (corrected 2026-08-15):
-    native fullscreen fails on the **virtual-display** sources — the
-    image disappears, observed on Ultra-Wide — while plain glasses-only
-    fullscreen, which captures the physical display, works fine. Root
-    cause on virtual displays is undiagnosed; the live workaround that
-    keeps 21:9 is YouTube theater mode (`t`) with a maximized window.
-    The cheap v1 is still a preset (big anchored curved screen, sides
-    off). Ask which scope when resumed.
+13. **Cinema mode** — PARKED by the user ("เดี๋ยวค่อยทำ"). The
+    fullscreen-black on virtual displays is **explained** (diagnosed
+    2026-08-15, RESEARCH.md "The fullscreen black had two layers"), and
+    it was two faults stacked: (a) our long-lived `SCStream` froze on
+    fullscreen-Space engagement, delivering stale frames at full rate —
+    **fixed**, via a 1 Hz CGS space poll plus an in-place
+    `updateContentFilter` refresh, the vendor's own recovery; (b) the
+    black the user actually saw, which is macOS: with Mission Control's
+    "Displays have separate Spaces" **disabled**
+    (`com.apple.spaces spans-displays` = 1), any native fullscreen
+    blacks out every *other* display at the WindowServer level,
+    including the glasses under our overlay. Not an app bug — a user
+    setting plus a logout. With the setting flipped, fullscreen on
+    Ultra-Wide is expected to work; **verification pending** — verify by
+    eye after re-login. If confirmed, the theater-mode (`t`) workaround
+    is no longer needed. The cheap v1 is still a preset (big anchored
+    curved screen, sides off). Ask which scope when resumed.
 
 ## Windows port — the plan (companion to [PORTING.md](PORTING.md))
 
@@ -145,6 +153,10 @@ Feature parity checklist for a first Windows release, in order:
   what overflowed the Settings window. Its one keeper, Ultra-Wide 21:9,
   is a Glasses-only toggle now. Do not reintroduce the source to bring
   back a resolution option.
+- "Displays have separate Spaces" must be ON for any virtual-display
+  session: with it off, macOS blacks out every other display during a
+  native fullscreen, glasses included. A machine setting, not something
+  the app can work around (diagnosed 2026-08-15; user re-login pending).
 - 21:9 at the signal level: impossible on macOS — the panel's EDID and
   macOS scaled modes top out at 16:9 1920×1080 (probed 2026-08-15).
   Ultra-Wide lives on a virtual display; EDID overrides are the Windows

@@ -431,3 +431,88 @@ video letterboxes on it, and the user waved it off — verbatim: "ยังไ�
 they turn their head left and right, even past the edge of the FOV. A
 fixed frame is a desktop-monitor problem; in a headset the frame moves
 with you.
+
+*(Resolved — see "The fullscreen black had two layers" below.)*
+
+## The fullscreen black had two layers (2026-08-15)
+
+The open thread above — native fullscreen on the Ultra-Wide desktop
+turns the glasses pure black while video and audio keep playing — took a
+night to unpick, and the answer was two independent faults stacked on
+each other. One was ours and is fixed. The other was never ours, and it
+is the one the user actually saw.
+
+The instruments first, because the whole diagnosis hangs on them. Two
+throwaway probes in `/tmp`: **fsprobe**, which takes an
+`SCScreenshotManager` frame of *every* display once a second and reports
+mean luma, and **fsstream**, which stands up two live `SCStream`s cloning
+the app's own filter and configuration. Between them they can answer the
+only question that matters when a picture goes black: is the content
+black, or is our copy of it stale? (Log stamps below are UTC,
+2026-08-14T19:3x–20:5x, which is the small hours of the 15th locally.)
+
+**Layer 1 — our stream froze, and kept pretending it hadn't.** On
+fullscreen-Space engagement the app's long-lived `SCStream` went on
+delivering `.complete` BGRA 2560×1080 IOSurface frames at a full 60 fps,
+every one of them stale: mean luma pinned at exactly 32.5 for 16
+seconds, with sparse content refreshes every 6–16 s. In those same
+seconds an independent screenshot, and a stream created fresh on the
+same display with the same filter, both saw the live video. So: not a
+black desktop, not a broken filter — a frozen stream that lies about it,
+which is the worst shape a bug can take, because every health signal we
+had read "fine".
+
+Three false leads died on the way. **The filter-exclusion hypothesis**
+(our overlay window is excluded from the filter; maybe fullscreen makes
+the exclusion swallow everything) — disproved, a fresh stream with a
+byte-identical filter saw live pixels. **The pixel-format hypothesis**
+(maybe fullscreen video flips the surface to a planar format our
+renderer silently drops) — disproved by the instrumentation, the format
+never changed; that logging has now been removed. And **the NSWorkspace
+observer**, which was the plan for triggering recovery:
+`activeSpaceDidChangeNotification` *never fires* for these transitions.
+Not late, not debounced away — measured, with an observer that logged
+unconditionally, and it logged nothing. A 1 Hz poll of
+`CGSManagedDisplayGetCurrentSpace` (`@_silgen_name`, `SpaceWatch.swift`)
+in the existing watchdog caught every single transition instead:
+`space: display space changed (1 → 1245)`. The dead observer and its
+debounce machinery are gone; the poll is the trigger.
+
+Recovery took two attempts. A hard stop/start bounce restored live
+frames for about 6 seconds and then re-froze — the new stream inherits
+the same fate. What worked came from **reading the vendor's own
+SpaceWalker binary**, which runs the same SCK + `CGVirtualDisplay` stack
+without this bug: it implements `streamDidBecomeActive`/`Inactive` and
+recovers by pushing a fresh content filter onto the *live* stream via
+`updateContentFilter`. Doing the same keeps capture live through the
+entire fullscreen window — measured, luma varying 15–57 continuously, no
+freeze, no black gap and no dropped-frame-clock reset. Worth noting that
+`streamDidBecomeInactive` (macOS 15.2+) never fired for us either; the
+logging stays, because a callback that is silent today is evidence
+tomorrow.
+
+**Layer 2 — the black itself was a system setting, not a bug.** This
+machine runs Mission Control's *"Displays have separate Spaces"*
+**disabled** — `defaults read com.apple.spaces spans-displays` returns
+`1`. With Spaces spanning displays, *any* native fullscreen blacks out
+every other display at the WindowServer level, and that includes the
+glasses display living under our overlay. That is why fsprobe measured
+**exactly 0.00** luma on the glasses display while the app was rendering
+happily at 60 fps: there was nothing to render *from*, and no amount of
+capture fixing would have changed it. It is also why SpaceWalker's
+binary explicitly checks `NSScreen.screensHaveSeparateSpaces`. The fix
+is a user setting plus a logout; the user has been told. **Expected to
+resolve; verify by eye after re-login.**
+
+One correction to yesterday's note. "Plain glasses-only fullscreen
+works" is not in tension with any of this — there the fullscreen video
+occupies the very display our overlay covers, so the spanning blackout
+lands on the *other* displays, not on the one being looked through.
+Same rule, different seat.
+
+The lesson is the one this file keeps relearning, in a new costume:
+**when a picture is black, measure the source and the copy separately.**
+Had the glasses-display screenshot been taken on night one, layer 2
+would have been named in a minute — and layer 1, a genuine bug worth
+fixing on its own merits, would still have been sitting there,
+undiscovered, waiting for the day the setting was flipped.
