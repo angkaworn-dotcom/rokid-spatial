@@ -414,7 +414,8 @@ fullscreen — which captures the physical display — works. That is the
 observation; the root cause on virtual displays is not diagnosed, and
 nothing here should be read as a theory. The workaround that keeps 21:9
 is YouTube's theater mode (`t`) with a maximized window; the alternative
-is to watch in plain glasses-only. This also corrects ROADMAP item 13,
+is to watch in plain glasses-only. This also corrects the ROADMAP's
+Cinema mode item (then 13, now 14),
 which had stated the crux as SCK's inability to capture native
 fullscreen video *at all* — the blanket form is wrong, and the item now
 carries the precise one.

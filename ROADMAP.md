@@ -72,7 +72,14 @@ eye burning almost completely gone).
 12. **Presets** — one-click bundles (Desk: Anchored + sides · Sofa:
     Smooth Follow + roll lock · Lying flat: pitch+yaw+roll locks), each
     a hotkey.
-13. **Cinema mode** — PARKED by the user ("เดี๋ยวค่อยทำ"). The
+13. **Settings opens in-view** — when a session is running, the Settings
+    window must open (and re-open) centred in the portion of the desktop
+    the user is currently looking at, floating above other windows — not
+    at the desktop's top edge. Tonight's recurrence: zoomed-in Ultra-Wide
+    hid the window off-view twice; remote-moving it mid-session caused
+    chaos ("จอมั่ว"). The fix belongs in the app (it knows the view
+    geometry); rescue-by-hand does not work.
+14. **Cinema mode** — PARKED by the user ("เดี๋ยวค่อยทำ"). The
     fullscreen-black on virtual displays is **explained** (diagnosed
     2026-08-15, RESEARCH.md "The fullscreen black had two layers"), and
     it was two faults stacked: (a) our long-lived `SCStream` froze on
