@@ -329,6 +329,12 @@ final class SpatialController: ObservableObject {
         case r1440x900
         case r1600x1000
         case r1920x1200
+        /// The supersampling experiment (ROADMAP item 1): same 1920×1200
+        /// points, but Retina-backed at 3840×2400 px. macOS renders text at
+        /// 2× and Catmull-Rom minifies it onto the panel — real detail, not
+        /// massaged detail. Costs ~4× capture bandwidth; the pacing log
+        /// rules on whether 60 fps survives.
+        case r1920x1200hi
         /// SpaceWalker's Ultra-Wide: one 21:9 desktop instead of a wall of
         /// three. Best with the curved screen — a flat 21:9 at working
         /// distance leaves the edges visibly further away than the centre.
@@ -341,17 +347,26 @@ final class SpatialController: ObservableObject {
             case .r1280x800: return 1280
             case .r1440x900: return 1440
             case .r1600x1000: return 1600
-            case .r1920x1200: return 1920
+            case .r1920x1200, .r1920x1200hi: return 1920
             case .r2560x1080: return 2560
             }
         }
 
         var height: Int { self == .r2560x1080 ? 1080 : width * 5 / 8 }
-        var label: String { self == .r2560x1080 ? "21:9" : "\(width)×\(height)" }
+        var label: String {
+            switch self {
+            case .r2560x1080: return "21:9"
+            case .r1920x1200hi: return "1920 2×"
+            default: return "\(width)×\(height)"
+            }
+        }
 
         /// Retina backing is worth the pixels once the desktop is small enough
-        /// that the virtual screen renders larger than its point size.
-        var hiDPI: Bool { self == .r1280x800 || self == .r1440x900 }
+        /// that the virtual screen renders larger than its point size — or,
+        /// for the supersampling experiment, at full size on purpose.
+        var hiDPI: Bool {
+            self == .r1280x800 || self == .r1440x900 || self == .r1920x1200hi
+        }
     }
 
     private var imu: RokidIMU?
@@ -475,6 +490,16 @@ final class SpatialController: ObservableObject {
     /// panel rate.
     private var captureRate: Int { lowPowerMode ? min(30, frameRate) : frameRate }
     private var sideCaptureRate: Int { lowPowerMode ? 15 : 30 }
+
+    /// The hiDPI virtual desktop must be captured at its full 2× backing —
+    /// clamping it to 3008 would silently downscale 3840→3008 and erase the
+    /// supersampling (the ROADMAP item 1 trap). Everything else keeps the
+    /// FOV-derived cap.
+    private var captureMaxWidth: Int {
+        source == .virtualDesktop && virtualResolution.hiDPI
+            ? max(3008, virtualResolution.width * 2)
+            : 3008
+    }
 
     // MARK: Persistence
 
@@ -637,7 +662,8 @@ final class SpatialController: ObservableObject {
                 displayID: captureID,
                 frameRate: captureRate,
                 excludingWindowNumber: source == .glassesOnly ? window?.windowNumber : nil,
-                showsCursor: source != .glassesOnly
+                showsCursor: source != .glassesOnly,
+                maxWidth: captureMaxWidth
             )
             frameClock.mark()
             if source == .glassesOnly {
@@ -915,7 +941,8 @@ final class SpatialController: ObservableObject {
                     // In glasses-only mode the renderer draws its own cursor;
                     // SCK's would be a duplicate whenever the system cursor
                     // transiently becomes visible again.
-                    showsCursor: source != .glassesOnly
+                    showsCursor: source != .glassesOnly,
+                    maxWidth: captureMaxWidth
                 )
                 captureError = nil
                 break
@@ -1256,7 +1283,8 @@ final class SpatialController: ObservableObject {
                     frameRate: self.captureRate,
                     excludingWindowNumber: self.source == .glassesOnly
                         ? self.window?.windowNumber : nil,
-                    showsCursor: self.source != .glassesOnly
+                    showsCursor: self.source != .glassesOnly,
+                    maxWidth: self.captureMaxWidth
                 )
                 self.frameClock.mark()
                 Self.appendLog("Capture restarted")
