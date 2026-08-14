@@ -18,6 +18,17 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var stream: SCStream?
     private let queue = DispatchQueue(label: "com.rokidspatial.capture", qos: .userInteractive)
 
+    /// What `start` was given, kept so the filter can be rebuilt in place on a
+    /// live stream. A captured virtual display's stream freezes when a
+    /// fullscreen-video Space engages; re-pushing an identically built filter
+    /// wakes it without the visible gap a stop/start leaves. See
+    /// `refreshContentFilter()`.
+    private var startedConfig: SCStreamConfiguration?
+    private var startedDisplayID: CGDirectDisplayID?
+    private var startedExcludingWindowNumber: Int?
+    private var startedShowsCursor = true
+    private var startedMaxWidth = 3008
+
     private(set) var pixelWidth = 0
     private(set) var pixelHeight = 0
 
@@ -46,49 +57,9 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
                excludingWindowNumber: Int? = nil,
                showsCursor: Bool = true,
                maxWidth: Int = 3008) async throws {
-        var content = try await SCShareableContent.excludingDesktopWindows(
-            false, onScreenWindowsOnly: true
+        let filter = try await makeContentFilter(
+            displayID: displayID, excludingWindowNumber: excludingWindowNumber
         )
-
-        // The narrow exclusion needs the overlay window in the shareable
-        // list, and a window created moments ago may not be enumerated yet.
-        // Falling back silently used to exclude the whole app instead — which
-        // also erased the settings window from the capture, the one place a
-        // glasses-only user can see it ("Settings won't open", seen live).
-        // Give enumeration a moment to catch up before accepting that.
-        if let number = excludingWindowNumber {
-            for _ in 0..<3 where !content.windows.contains(
-                where: { $0.windowID == CGWindowID(number) }) {
-                try await Task.sleep(nanoseconds: 700_000_000)
-                content = try await SCShareableContent.excludingDesktopWindows(
-                    false, onScreenWindowsOnly: true
-                )
-            }
-        }
-
-        guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
-            throw CaptureError.displayNotShareable
-        }
-
-        // Exclude ourselves so the overlay never feeds back into the capture.
-        let ourPID = ProcessInfo.processInfo.processIdentifier
-        let ourApp = content.applications.first { $0.processID == ourPID }
-
-        let filter: SCContentFilter
-        if let number = excludingWindowNumber,
-           let overlay = content.windows.first(where: { $0.windowID == CGWindowID(number) }) {
-            filter = SCContentFilter(display: display, excludingWindows: [overlay])
-        } else {
-            if excludingWindowNumber != nil {
-                AppLog.append("capture: overlay window never enumerated — "
-                    + "excluding the whole app (settings will be invisible)")
-            }
-            filter = SCContentFilter(
-                display: display,
-                excludingApplications: ourApp.map { [$0] } ?? [],
-                exceptingWindows: []
-            )
-        }
 
         // Capture at the display's true pixel size so text stays crisp once
         // it is projected, but cap it — beyond this we are paying for detail
@@ -119,6 +90,85 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         try await stream.startCapture()
         self.stream = stream
+
+        startedConfig = config
+        startedDisplayID = displayID
+        startedExcludingWindowNumber = excludingWindowNumber
+        startedShowsCursor = showsCursor
+        startedMaxWidth = maxWidth
+    }
+
+    /// Build the content filter `start` uses. Factored out so
+    /// `refreshContentFilter()` produces a filter identical by construction,
+    /// not merely by resemblance.
+    private func makeContentFilter(displayID: CGDirectDisplayID,
+                                   excludingWindowNumber: Int?) async throws -> SCContentFilter {
+        var content = try await SCShareableContent.excludingDesktopWindows(
+            false, onScreenWindowsOnly: true
+        )
+
+        // The narrow exclusion needs the overlay window in the shareable
+        // list, and a window created moments ago may not be enumerated yet.
+        // Falling back silently used to exclude the whole app instead — which
+        // also erased the settings window from the capture, the one place a
+        // glasses-only user can see it ("Settings won't open", seen live).
+        // Give enumeration a moment to catch up before accepting that.
+        if let number = excludingWindowNumber {
+            for _ in 0..<3 where !content.windows.contains(
+                where: { $0.windowID == CGWindowID(number) }) {
+                try await Task.sleep(nanoseconds: 700_000_000)
+                content = try await SCShareableContent.excludingDesktopWindows(
+                    false, onScreenWindowsOnly: true
+                )
+            }
+        }
+
+        guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
+            throw CaptureError.displayNotShareable
+        }
+
+        // Exclude ourselves so the overlay never feeds back into the capture.
+        let ourPID = ProcessInfo.processInfo.processIdentifier
+        let ourApp = content.applications.first { $0.processID == ourPID }
+
+        if let number = excludingWindowNumber,
+           let overlay = content.windows.first(where: { $0.windowID == CGWindowID(number) }) {
+            return SCContentFilter(display: display, excludingWindows: [overlay])
+        }
+        if excludingWindowNumber != nil {
+            AppLog.append("capture: overlay window never enumerated — "
+                + "excluding the whole app (settings will be invisible)")
+        }
+        return SCContentFilter(
+            display: display,
+            excludingApplications: ourApp.map { [$0] } ?? [],
+            exceptingWindows: []
+        )
+    }
+
+    /// Re-push a freshly built filter and the stored configuration onto the
+    /// *live* stream.
+    ///
+    /// This is the vendor's recovery for the fullscreen-video freeze: when a
+    /// fullscreen Space engages over a captured virtual display, the window
+    /// server keeps handing us the last frame forever. Updating the filter in
+    /// place re-seats the stream against current content without the black gap
+    /// — and the dropped frame clock — of a stop/start bounce.
+    func refreshContentFilter() async {
+        guard let stream, let displayID = startedDisplayID else { return }
+        do {
+            let filter = try await makeContentFilter(
+                displayID: displayID,
+                excludingWindowNumber: startedExcludingWindowNumber
+            )
+            try await stream.updateContentFilter(filter)
+            if let config = startedConfig {
+                try await stream.updateConfiguration(config)
+            }
+            AppLog.append("capture: content filter refreshed")
+        } catch {
+            AppLog.append("capture: filter refresh failed: \(error)")
+        }
     }
 
     func stop() async {
@@ -151,5 +201,18 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.onStop?(error)
         }
+    }
+
+    // macOS 15.2 and later only. Whether these even fire on the
+    // fullscreen-video freeze is itself the question — the logging answers it.
+    @available(macOS 15.2, *)
+    func streamDidBecomeActive(_ stream: SCStream) {
+        AppLog.append("capture: stream became active")
+    }
+
+    @available(macOS 15.2, *)
+    func streamDidBecomeInactive(_ stream: SCStream) {
+        AppLog.append("capture: stream became inactive")
+        Task { [weak self] in await self?.refreshContentFilter() }
     }
 }

@@ -394,6 +394,9 @@ final class SpatialController: ObservableObject {
     private let frameClock = FrameClock()
     private var unhealthyTicks = 0
     private var mirrorRecoveryAttempts = 0
+    /// Last Space id seen on the captured display, polled by healthCheck().
+    /// 0 means "not observed yet" — see SpaceWatch.
+    private var lastCaptureSpaceID: UInt64 = 0
     private var watchdogArmsAt = Date.distantPast
 
     /// True from the moment Start is accepted until the session is running or
@@ -539,6 +542,11 @@ final class SpatialController: ObservableObject {
             MainActor.assumeIsolated { self?.systemDidWake() }
         }
 
+        // Space transitions are not observed here: measured 2026-08-15,
+        // NSWorkspace.activeSpaceDidChangeNotification never fires for the
+        // fullscreen-Space engagement that freezes the capture. The CGS space
+        // poll in healthCheck() is the trigger that works.
+
         NotificationCenter.default.addObserver(
             forName: .NSProcessInfoPowerStateDidChange,
             object: nil, queue: .main
@@ -601,7 +609,13 @@ final class SpatialController: ObservableObject {
             try? await capture.start(
                 displayID: captureID,
                 frameRate: captureRate,
-                excludingWindowNumber: source == .glassesOnly ? window?.windowNumber : nil,
+                // The exclusion exists to break same-display recursion. A working
+                // virtual desktop is a *different* display than the overlay's, so
+                // it is unnecessary there — and excluding our own window on a
+                // virtual display has been observed to black out fullscreen-video
+                // Spaces (see RESEARCH.md 2026-08-15).
+                excludingWindowNumber: source == .glassesOnly && !workingDesktopActive
+                    ? window?.windowNumber : nil,
                 showsCursor: source != .glassesOnly
             )
             frameClock.mark()
@@ -615,6 +629,59 @@ final class SpatialController: ObservableObject {
                                                  showsCursor: false)
                 }
             }
+        }
+    }
+
+    /// Re-open the main capture stream after a Space transition.
+    ///
+    /// Measured 2026-08-15: when a fullscreen-video Space engages on a
+    /// captured *virtual* display, our long-lived SCStream freezes — it keeps
+    /// delivering .complete BGRA frames at the full rate, but the content is a
+    /// stale surface (mean luma pinned for tens of seconds), so the glasses
+    /// show what reads as a black screen. A stream created fresh on the same
+    /// display in the same seconds sees the live video, so the cure is simply
+    /// to bounce the stream. Only the working-desktop (ultra-wide/stereo) path
+    /// is affected; plain glasses-only and mirror capture physical displays,
+    /// where fullscreen works, and are left alone. Side captures are untouched.
+    ///
+    /// The stop/start bounce only bought ~6 s before the freeze returned. The
+    /// vendor's own app (same SCK + CGVirtualDisplay stack, no such bug)
+    /// recovers by pushing a fresh content filter onto the *live* stream
+    /// instead, so that is what we do now — `useHardBounce` flips back to the
+    /// old path in one edit if the in-place refresh proves not to be enough.
+    private static let useHardBounce = false
+
+    private func bounceCaptureForSpaceChange() {
+        guard isRunning, workingDesktopActive else { return }
+        guard Self.useHardBounce else {
+            Task {
+                await capture.refreshContentFilter()
+                frameClock.mark()
+                Self.appendLog("space changed — content filter refreshed (fullscreen video fix)")
+            }
+            return
+        }
+        let captureID: CGDirectDisplayID?
+        switch source {
+        case .mirror: captureID = displays.deskDisplayID
+        case .glassesOnly:
+            captureID = workingDesktopActive ? virtualDisplay.displayID
+                                             : displays.glassesDisplayID
+        }
+        guard let captureID else { return }
+        Task {
+            await capture.stop()
+            try? await capture.start(
+                displayID: captureID,
+                frameRate: captureRate,
+                // Not on a working virtual desktop — see the note in
+                // adaptCaptureToPowerState().
+                excludingWindowNumber: source == .glassesOnly && !workingDesktopActive
+                    ? window?.windowNumber : nil,
+                showsCursor: source != .glassesOnly
+            )
+            frameClock.mark()
+            Self.appendLog("space changed — capture stream bounced (fullscreen video fix)")
         }
     }
 
@@ -874,7 +941,10 @@ final class SpatialController: ObservableObject {
                 try await capture.start(
                     displayID: captureID,
                     frameRate: captureRate,
-                    excludingWindowNumber: source == .glassesOnly ? window?.windowNumber : nil,
+                    // Not on a working virtual desktop — see the note at the
+                    // first call site.
+                    excludingWindowNumber: source == .glassesOnly && !workingDesktopActive
+                        ? window?.windowNumber : nil,
                     // In glasses-only mode the renderer draws its own cursor;
                     // SCK's would be a duplicate whenever the system cursor
                     // transiently becomes visible again.
@@ -896,6 +966,7 @@ final class SpatialController: ObservableObject {
         frameClock.mark()
         unhealthyTicks = 0
         mirrorRecoveryAttempts = 0
+        lastCaptureSpaceID = 0
         captureRestarts = 0
         // Display reconfiguration ripples for several seconds after startup.
         // Watching during that window produces false alarms and tears down a
@@ -1165,6 +1236,7 @@ final class SpatialController: ObservableObject {
         // in one debugging session, indistinguishable from a mystery fault.
         // It was the Stop button.
         Self.appendLog("Stop — tearing down")
+        lastCaptureSpaceID = 0
         Task {
             await capture.stop()
             for sideCapture in sideCaptures { await sideCapture.stop() }
@@ -1223,8 +1295,10 @@ final class SpatialController: ObservableObject {
                 try await self.capture.start(
                     displayID: captureID,
                     frameRate: self.captureRate,
+                    // Not on a working virtual desktop — see the note at the
+                    // first call site.
                     excludingWindowNumber: self.source == .glassesOnly
-                        ? self.window?.windowNumber : nil,
+                        && !self.workingDesktopActive ? self.window?.windowNumber : nil,
                     showsCursor: self.source != .glassesOnly
                 )
                 self.frameClock.mark()
@@ -1698,6 +1772,22 @@ final class SpatialController: ObservableObject {
     /// stopping is not a nicety.
     private func healthCheck() {
         guard isRunning, Date() >= watchdogArmsAt else { return }
+
+        // Space transitions on the captured virtual display, polled rather
+        // than observed — activeSpaceDidChangeNotification does not fire for
+        // the fullscreen-video transition that freezes the stream (measured
+        // live 2026-08-15). A space id of 0 means "unknown"; stay inert.
+        if workingDesktopActive, let captureID = virtualDisplay.displayID {
+            let spaceID = SpaceWatch.currentSpaceID(forDisplay: captureID)
+            if spaceID != 0, spaceID != lastCaptureSpaceID {
+                if lastCaptureSpaceID != 0 {
+                    Self.appendLog("space: display space changed (\(lastCaptureSpaceID) → \(spaceID)) — refreshing the capture stream")
+                    bounceCaptureForSpaceChange()
+                }
+                lastCaptureSpaceID = spaceID
+            }
+        }
+
         var problems: [String] = []
 
         if let glassesID = displays.glassesDisplayID {
