@@ -531,3 +531,48 @@ Ultra-Wide is **per-window capture** — an `SCContentFilter`
 `desktopIndependentWindow` on the video window itself, drawn as a big
 curved screen, which never involves a fullscreen Space at all. Until
 that exists, theater mode (`t`) plus a maximized window is the answer.
+
+## Ultra-Wide 21:9, closed: healthy numbers, unusable UX (2026-08-15)
+
+The verdict, at about 05:00 after a night of real use: *"งั้นโหมดนี้ก็ใช้งานจริงไม่ได้
+เอาออกเลย 21:9 ลบออกได้เลย"* — the mode does not work in practice; remove it.
+
+Nothing in the measurements argued against it. The 2560×1080 working
+desktop came up at 60 Hz and the session held 60 fps with the pacing log
+clean. What killed it was the experience around the picture, and the
+instructive part is that almost none of the failures were *about* 21:9 —
+they were general weaknesses the mode exposed hardest:
+
+- **The Settings window kept opening outside the view.** Twice reported
+  as "Settings won't open"; the window existed, just not anywhere the
+  zoomed-in eye was pointing. Zoom past 1:1 — which this user habitually
+  does — and a window placed at the desktop's top edge is simply gone.
+  This bites plain glasses-only too; it survives as ROADMAP QoL item 13.
+- **The hardware mouse vanished on the mirrored MacBook screen.** By
+  design (glasses-only hides the system cursor and the renderer paints
+  its own), but with the built-in merged into the working desktop's
+  mirror set, the laptop screen showed a desktop with no pointer — which
+  reads as breakage, not as a design choice.
+- **Fullscreen video was black**, and by then it was understood: the
+  `spans-displays` OS behaviour, whose only cure is a setting the user
+  vetoed to protect the 3-screen wall.
+- **Display-arrangement chaos after emergency kills** ("จอมั่ว"),
+  compounding each of the above.
+
+Removed: the `ultraWide` toggle and its two captions, `ultraWideActive`
+and `workingDesktopActive` (every site reverts to `stereoActive`, the
+pre-Ultra-Wide semantics), the 2560×1080 virtual-display creation, the
+`--ultrawide` flag, and the `.sameOnBoth ? 1080` arm in
+`prepareStandalone`. The old `ultraWide` UserDefaults value is left
+orphaned — harmless, and never read again.
+
+Kept, because the diagnosis fruits outlive the feature: `SpaceWatch` and
+the 1 Hz CGS space poll with `refreshContentFilter()` — the stream-freeze
+fix is real and now serves the stereo working desktops; `ScreenCapture`
+entirely as-is, including `maxWidth:` and the stream-activity logging;
+`Tools/remirror-displays.swift` and the `rescue.sh` additions. The
+2nd-desktop source stays retired: sources are Mirror Mac and Glasses only.
+
+Standing decision recorded in ROADMAP: do not reintroduce Ultra-Wide
+as-is. Any future widescreen goes through Cinema v2 per-window capture,
+which is now both the video route and the only widescreen story.

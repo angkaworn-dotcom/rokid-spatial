@@ -34,15 +34,9 @@ A third source, **Separate desktop** — an empty second desktop sized to the
 glasses — existed until 2026-08-15 and is retired. It measured sharper than
 mirroring (1.23× against 0.74×), but every session began with dragging windows
 onto an empty screen by hand, and no amount of sharpness repaid that. Its one
-keeper survives as a glasses-only option:
-
-**Ultra-Wide 21:9** — a toggle under **Glasses only**. The session works on one
-panoramic 2560×1080 desktop instead of the three-screen wall: a virtual display
-becomes the main screen, the built-in mirrors it, and the glasses show only the
-overlay. Windows you already had follow you in, because the MacBook desktop is
-merged rather than hidden. Best paired with **Curved screen**, so the edges sit
-the same distance away as the centre. 21:9 is only available this way — the
-panel's own EDID has no wide modes (see RESEARCH.md).
+keeper, an **Ultra-Wide 21:9** toggle under Glasses only, was removed on
+2026-08-15 after a night of real use: the numbers were fine (2560×1080 at a
+steady 60 fps), the experience was not. See RESEARCH.md for the post-mortem.
 
 ### Glasses-only mode: the fine print
 
@@ -132,9 +126,9 @@ launches.
 What starting does depends on the mode. **Glasses only** switches the panel
 mode, leaves mirroring exactly as macOS wants it, and dims the built-in
 screen; quitting restores brightness and puts the panel back to 2D, and that
-is the whole story. **Mirror Mac** — and the glasses-only variants that build a
-working virtual desktop, SBS and Ultra-Wide — additionally un-mirror and
-rearrange the displays, and restore them on quit.
+is the whole story. **Mirror Mac** — and the SBS variants, which build a
+working virtual desktop — additionally un-mirror and rearrange the displays,
+and restore them on quit.
 
 Two things are deliberately *not* restored on exit from those arrangements,
 both learned the hard way:

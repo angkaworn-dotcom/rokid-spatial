@@ -30,11 +30,10 @@ eye burning almost completely gone).
    upscaling, visibly better than Catmull-Rom when a virtual desktop is
    blown up onto the panel. **Re-scoped 2026-08-15:** the stated use
    case was the small 2nd-desktop sizes, and that source is retired. The
-   one magnifying case left is Ultra-Wide — 2560 px of desktop across a
-   1920 px panel is *minification*, not magnification, until the user
-   zooms in past 1:1, which they habitually do. Worth doing only if
-   zoomed-in Ultra-Wide text is judged soft by eye; otherwise closed for
-   lack of a use case.
+   one magnifying case left after it was Ultra-Wide, and that is gone too
+   (removed 2026-08-15). **Closed for lack of a use case** — the daily
+   driver renders 1:1 onto the panel. Reopen only if Cinema v2's
+   per-window capture ends up blowing a small window up large.
 3. **RCAS instead of the clamped unsharp mask** — per-pixel adaptive
    sharpening strength. Principled, but the visible delta over the
    current slider is small. Do only if sharpening artefacts ever annoy.
@@ -75,10 +74,13 @@ eye burning almost completely gone).
 13. **Settings opens in-view** — when a session is running, the Settings
     window must open (and re-open) centred in the portion of the desktop
     the user is currently looking at, floating above other windows — not
-    at the desktop's top edge. Tonight's recurrence: zoomed-in Ultra-Wide
-    hid the window off-view twice; remote-moving it mid-session caused
-    chaos ("จอมั่ว"). The fix belongs in the app (it knows the view
-    geometry); rescue-by-hand does not work.
+    at the desktop's top edge. Observed twice on 2026-08-15 ("Settings
+    won't open" — the window was there, just outside the zoomed-in view),
+    and it was one of the failures that killed Ultra-Wide; but it is not
+    an Ultra-Wide bug. Any zoomed-in glasses-only session hides it the
+    same way, and remote-moving the window mid-session caused chaos
+    ("จอมั่ว"). The fix belongs in the app (it knows the view geometry);
+    rescue-by-hand does not work.
 14. **Cinema mode** — PARKED by the user ("เดี๋ยวค่อยทำ"). The
     fullscreen-black on virtual displays is **explained** (diagnosed
     2026-08-15, RESEARCH.md "The fullscreen black had two layers"), and
@@ -93,14 +95,16 @@ eye burning almost completely gone).
     including the glasses under our overlay. Understood — but the
     setting flip is **REJECTED by the user** (2026-08-15): separate
     Spaces breaks the 3-screen side-screen wall (no window straddling,
-    per-display menu bars). Do not re-suggest it. So the live workaround
-    stays: YouTube theater mode (`t`) + a maximized window on
-    Ultra-Wide. The real path forward is **Cinema mode v2 —
-    per-window capture** of the video window
-    (`SCContentFilter(desktopIndependentWindow:)`) rendered as one big
-    curved screen: immune to Spaces, to fullscreen, and to the setting
-    entirely. The cheap v1 preset (big anchored curved screen, sides
-    off) still stands. Ask which scope when resumed.
+    per-display menu bars). Do not re-suggest it. The theater-mode
+    workaround that went with it (`t` + a maximized window on the
+    Ultra-Wide desktop) no longer applies — Ultra-Wide was removed
+    2026-08-15. What remains is **Cinema mode v2 — per-window capture**
+    of the video window (`SCContentFilter(desktopIndependentWindow:)`)
+    rendered as one big curved screen: immune to Spaces, to fullscreen,
+    and to the setting entirely. It is now both the video route *and*
+    the only remaining widescreen story. The cheap v1 preset (big
+    anchored curved screen, sides off) still stands. Ask which scope
+    when resumed.
 
 ## Windows port — the plan (companion to [PORTING.md](PORTING.md))
 
@@ -163,16 +167,23 @@ Feature parity checklist for a first Windows release, in order:
 - The 2nd-desktop capture source itself: retired 2026-08-15 — arranging
   windows by hand every session was never repaid, and its picker was
   what overflowed the Settings window. Its one keeper, Ultra-Wide 21:9,
-  is a Glasses-only toggle now. Do not reintroduce the source to bring
-  back a resolution option.
+  became a Glasses-only toggle and has since been removed too (see
+  below). Do not reintroduce the source to bring back a resolution
+  option. Sources are Mirror Mac / Glasses only.
+- Ultra-Wide 21:9: removed 2026-08-15 at the user's verdict after real
+  use — measured healthy, but the UX (Settings out of view when zoomed,
+  hidden mouse on the mirror, fullscreen black under spans-displays)
+  made it unusable in practice. Do not reintroduce as-is; any future
+  widescreen goes through Cinema v2 per-window capture.
 - "Displays have separate Spaces": stays OFF on this machine — the user
   vetoed enabling it (it breaks the 3-screen wall: no window
   straddling, per-display menu bars). Fullscreen video on
   virtual-display sources therefore stays black by OS design; the
   answer is per-window capture (Cinema v2), not the setting.
 - 21:9 at the signal level: impossible on macOS — the panel's EDID and
-  macOS scaled modes top out at 16:9 1920×1080 (probed 2026-08-15).
-  Ultra-Wide lives on a virtual display; EDID overrides are the Windows
-  port's territory.
+  macOS scaled modes top out at 16:9 1920×1080 (probed 2026-08-15). A
+  21:9 desktop could only ever live on a virtual display (which is what
+  the removed Ultra-Wide did); EDID overrides are the Windows port's
+  territory.
 - Background themes: not worth it on birdbath optics — any non-black
   background is stray light in the eye.
