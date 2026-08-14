@@ -906,11 +906,11 @@ final class SpatialController: ObservableObject {
             reason: "Realtime XR rendering")
         isRunning = true
         isStarting = false
-        // The standalone variants rescue scattered windows via the
-        // Accessibility API; surface the consent prompt now, while the user
-        // is right here starting the session. One system dialog, only until
-        // granted (consent sticks to the stable dev signature).
-        if standaloneActive, !WindowRescue.hasPermission {
+        // The standalone variants and Ultra-Wide rescue scattered windows via
+        // the Accessibility API; surface the consent prompt now, while the
+        // user is right here starting the session. One system dialog, only
+        // until granted (consent sticks to the stable dev signature).
+        if standaloneActive || ultraWideActive, !WindowRescue.hasPermission {
             WindowRescue.requestPermission()
         }
         let size = displays.glassesPixelSize
@@ -1111,7 +1111,7 @@ final class SpatialController: ObservableObject {
     private let mousePoller = MousePoller()
 
     /// Desktops the user cannot currently see: the parked dark displays of a
-    /// standalone session, or — in the extended sources — the glasses'
+    /// standalone or Ultra-Wide session, or — in the extended sources — the glasses'
     /// desktop, which sits under the opaque overlay. The settings-window
     /// rescue polls this; a window on any of these reads as "won't open".
     func hiddenDisplayIDs() -> [CGDirectDisplayID] {
@@ -1119,9 +1119,9 @@ final class SpatialController: ObservableObject {
         if source != .glassesOnly {
             return [displays.glassesDisplayID].compactMap { $0 }
         }
-        guard standaloneActive else { return [] }
-        let mainID = stereoActive ? virtualDisplay.displayID
-                                  : displays.glassesDisplayID
+        guard standaloneActive || ultraWideActive else { return [] }
+        let mainID = stereoActive || ultraWideActive ? virtualDisplay.displayID
+                                                     : displays.glassesDisplayID
         guard let mainID else { return [] }
         return standaloneParked(excluding: mainID)
     }
@@ -1633,17 +1633,19 @@ final class SpatialController: ObservableObject {
                     }
                 }
                 // Plain glasses-only has one display — nowhere to get
-                // stranded. The standalone variants have hidden desktops
-                // (the glasses' sliver; the parked dark built-in for 90/120)
+                // stranded. The standalone variants and Ultra-Wide have
+                // hidden desktops (the glasses' sliver — the whole glasses
+                // desktop under Ultra-Wide; the parked dark built-in for 90/120)
                 // and macOS's re-applies scatter windows onto them (seen
                 // live: Discord on the sliver); list their owners.
                 self.strandedApps = {
                     if self.source != .glassesOnly {
                         return self.displays.strandedWindowOwners()
                     }
-                    guard self.standaloneActive else { return [] }
-                    let mainID = self.stereoActive ? self.virtualDisplay.displayID
-                                                   : self.displays.glassesDisplayID
+                    guard self.standaloneActive || self.ultraWideActive else { return [] }
+                    let mainID = self.stereoActive || self.ultraWideActive
+                        ? self.virtualDisplay.displayID
+                        : self.displays.glassesDisplayID
                     guard let mainID else { return [] }
                     var owners: [String] = []
                     for hidden in self.standaloneParked(excluding: mainID) {
@@ -1690,29 +1692,33 @@ final class SpatialController: ObservableObject {
 
         if let glassesID = displays.glassesDisplayID {
             // Modes that must stay unmirrored (extended sources, the
-            // standalone variants) treat an unexpected mirror as a fault to
-            // undo; plain glasses-only treats the mirror as the desired
-            // state. SBS-60 allows exactly one pair — built-in as slave of
-            // the working desktop (the stranded-window fix); anything else
-            // harmonizes the flip rate or pins a display the wall needs.
-            let allowedMaster = sbsMode == .sbs60 ? virtualDisplay.displayID : nil
-            if source != .glassesOnly || standaloneActive,
-               standaloneActive ? displays.unexpectedMirror(allowedMaster: allowedMaster)
+            // standalone variants, Ultra-Wide) treat an unexpected mirror as a
+            // fault to undo; plain glasses-only treats the mirror as the
+            // desired state. SBS-60 and Ultra-Wide allow exactly one pair —
+            // built-in as slave of the working desktop (the stranded-window
+            // fix); anything else harmonizes the flip rate or pins a display
+            // the wall needs.
+            let allowedMaster = sbsMode == .sbs60 || ultraWideActive
+                ? virtualDisplay.displayID : nil
+            if source != .glassesOnly || standaloneActive || ultraWideActive,
+               standaloneActive || ultraWideActive
+                                ? displays.unexpectedMirror(allowedMaster: allowedMaster)
                                 : CGDisplayIsInMirrorSet(glassesID) != 0 {
                 // Try to undo it before treating it as fatal — macOS often
                 // reinstates mirroring transiently while a reconfiguration
                 // settles, and recovering beats tearing the session down.
                 mirrorRecoveryAttempts += 1
                 if mirrorRecoveryAttempts <= 2, displays.reassertUnmirrored() {
-                    // Blanket un-mirroring also removed SBS-60's wanted
-                    // pair; put it straight back.
+                    // Blanket un-mirroring also removed the wanted pair of
+                    // SBS-60 / Ultra-Wide; put it straight back.
                     if let allowedMaster {
                         _ = displays.mirrorBuiltinOntoWorking(allowedMaster)
                     }
                     // The re-apply also scrambled the arrangement. The
-                    // standalone wall is put back by the layout check below
-                    // on the next tick; the extended sources fix theirs here.
-                    if !standaloneActive { applyArrangement() }
+                    // standalone / Ultra-Wide wall is put back by the layout
+                    // check below on the next tick; the extended sources fix
+                    // theirs here.
+                    if !standaloneActive, !ultraWideActive { applyArrangement() }
                     setStatus("macOS re-enabled mirroring; un-mirrored it again.")
                     unhealthyTicks = 0
                     return
@@ -1726,8 +1732,12 @@ final class SpatialController: ObservableObject {
             // mirrored (dark, no second desktop), and macOS keeps re-applying
             // the unmirrored arrangement it remembered from the standalone
             // experiments. Capped so a truly stubborn window server cannot
-            // make this loop forever. Never in the standalone variants.
-            if source == .glassesOnly, !standaloneActive, mirrorRecoveryAttempts <= 4,
+            // make this loop forever. Never in the standalone variants, and
+            // never in Ultra-Wide, whose built-in is a mirror slave of the
+            // working desktop — re-mirroring onto the glasses here would
+            // fight the arrangement once a second.
+            if source == .glassesOnly, !standaloneActive, !ultraWideActive,
+               mirrorRecoveryAttempts <= 4,
                displays.reassertGlassesOnlyMirror() {
                 mirrorRecoveryAttempts += 1
                 // The re-mirror is itself a reconfiguration; let it settle
@@ -1735,7 +1745,8 @@ final class SpatialController: ObservableObject {
                 unhealthyTicks = 0
                 return
             }
-            // SBS-60's merge mirror can fall out on a remembered re-apply,
+            // The merge mirror of SBS-60 / Ultra-Wide can fall out on a
+            // remembered re-apply,
             // resurfacing the built-in as its own desktop and re-stranding
             // windows there. Put it back, capped like the other fights.
             if let allowedMaster, mirrorRecoveryAttempts <= 4,
@@ -1747,15 +1758,17 @@ final class SpatialController: ObservableObject {
             // The main screen stays at the centre of the wall. When macOS
             // re-applies a remembered arrangement that scatters the displays,
             // put them back and re-derive the cursor mapping, whose display
-            // bounds were captured at attach time. In SBS the wall's main is
-            // the working desktop, and the glasses + built-in park below it.
+            // bounds were captured at attach time. In SBS and Ultra-Wide the
+            // wall's main is the working desktop, and the glasses (+ the
+            // built-in, where it is not a mirror slave) park below it.
             if source == .glassesOnly, !layoutFixInFlight {
                 let sides = sideScreens.indices.compactMap { index -> (id: CGDirectDisplayID, placement: DisplayManager.SidePlacement)? in
                     guard let id = sideDisplays[index].displayID else { return nil }
                     return (id, sidePlacement(index))
                 }
-                let mainID = stereoActive ? virtualDisplay.displayID : glassesID
-                let parked = standaloneActive
+                let mainID = stereoActive || ultraWideActive
+                    ? virtualDisplay.displayID : glassesID
+                let parked = standaloneActive || ultraWideActive
                     ? (mainID.map { standaloneParked(excluding: $0) } ?? [])
                     : []
                 if let mainID,
@@ -1778,7 +1791,7 @@ final class SpatialController: ObservableObject {
                 // right moment for the visibility rescues. Bounced or moved
                 // too early they just land on the still-scrambled
                 // arrangement again (seen live).
-                if standaloneActive, let mainID {
+                if standaloneActive || ultraWideActive, let mainID {
                     let hidden = standaloneParked(excluding: mainID)
                     if dockBounces < 3,
                        displays.rehomeDockIfHidden(hiddenDisplays: hidden) {
