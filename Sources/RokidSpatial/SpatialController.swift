@@ -726,9 +726,9 @@ final class SpatialController: ObservableObject {
         // renegotiates, so keep it off the main thread.
         // Applied to the glasses display after the panel settles; the
         // requested size falls back to the nearest one the panel offers.
-        Task.detached(priority: .userInitiated) { [displays, source, standaloneActive] in
+        Task.detached(priority: .userInitiated) { [displays, source, standaloneActive, ultraWideActive] in
             do {
-                if standaloneActive {
+                if standaloneActive || ultraWideActive {
                     try displays.prepareStandalone(mode: displayMode)
                 } else if source == .glassesOnly {
                     try displays.prepareGlassesOnly(mode: displayMode)
@@ -937,7 +937,7 @@ final class SpatialController: ObservableObject {
                 BuiltinBrightness.set(deskID, to: 0)
             }
 
-            if standaloneActive {
+            if standaloneActive || ultraWideActive {
                 // The standalone wall in one batched reconfiguration: the
                 // main desktop centred at the origin (the working virtual
                 // display for stereo, the glasses themselves for 120 Hz),
@@ -949,7 +949,7 @@ final class SpatialController: ObservableObject {
                     return (id, sidePlacement(index))
                 }
                 let parked = standaloneParked(excluding: captureID)
-                let mergeBuiltin = sbsMode == .sbs60
+                let mergeBuiltin = sbsMode == .sbs60 || ultraWideActive
                 await Task.detached { [displays] in
                     // Creating the sides invites a remembered-arrangement
                     // re-apply, and the mirror it brings back is not
@@ -1128,11 +1128,12 @@ final class SpatialController: ObservableObject {
 
     /// Displays a standalone session parks below the wall: the glasses'
     /// sliver desktop (stereo variants only — at 120 Hz the glasses ARE the
-    /// wall's main) and the built-in — except in SBS-60, where the built-in
-    /// is a mirror slave of the working desktop and has no place of its own.
+    /// wall's main) and the built-in — except in SBS-60 and Ultra-Wide, where
+    /// the built-in is a mirror slave of the working desktop and has no place
+    /// of its own.
     private func standaloneParked(excluding mainID: CGDirectDisplayID) -> [CGDirectDisplayID] {
         [displays.glassesDisplayID,
-         sbsMode == .sbs60 ? nil : displays.deskDisplayID]
+         sbsMode == .sbs60 || ultraWideActive ? nil : displays.deskDisplayID]
             .compactMap { $0 }.filter { $0 != mainID }
     }
 
@@ -1165,7 +1166,7 @@ final class SpatialController: ObservableObject {
                 // Mirroring stays — it is the desired end state, so there is
                 // no enforcement wait and stop is immediate. The standalone
                 // experiment re-mirrors first to land in the same state.
-                displays.restorePanelOnly(remirror: standaloneActive)
+                displays.restorePanelOnly(remirror: standaloneActive || ultraWideActive)
                 setStatus("Idle")
             } else {
                 setStatus("Restoring displays…")
@@ -1257,7 +1258,7 @@ final class SpatialController: ObservableObject {
         isRunning = false
         if source == .glassesOnly {
             // Mirroring is the desired end state here: no fight, no helper.
-            displays.restorePanelOnly(remirror: standaloneActive)
+            displays.restorePanelOnly(remirror: standaloneActive || ultraWideActive)
             return
         }
         do {
@@ -1283,7 +1284,7 @@ final class SpatialController: ObservableObject {
         restoreBrightness()
         DockAutoHide.restore()
         if source == .glassesOnly {
-            displays.restorePanelOnly(remirror: standaloneActive)
+            displays.restorePanelOnly(remirror: standaloneActive || ultraWideActive)
         } else {
             displays.restore()
         }
@@ -1836,7 +1837,7 @@ final class SpatialController: ObservableObject {
         restoreBrightness()
         DockAutoHide.restore()
         if source == .glassesOnly {
-            displays.restorePanelOnly(remirror: standaloneActive)
+            displays.restorePanelOnly(remirror: standaloneActive || ultraWideActive)
         } else {
             displays.restore()
         }
