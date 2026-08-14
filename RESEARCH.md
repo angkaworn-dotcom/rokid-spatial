@@ -299,3 +299,12 @@ sharpening is ever revisited, gate it by angular velocity — full
 strength only while the head is still, fading to zero during turns
 (the same insight as motionLock, applied to the kernel instead of the
 anchor).
+
+**Correction (same day): sharpen exonerated — the judder was Adaptive
+VSync.** The user had flipped Adaptive VSync on while exploring Tuning;
+with the render already locked at the panel's 60, disabling display
+sync buys nothing and every head turn drags a tear line through the
+image, which reads as กระตุก. VSync off → judder gone → user pushed
+Sharpen to 1.0 and kept it. Standing advice now in the caption: leave
+Adaptive VSync off unless frames are actually being dropped — at a
+steady 60/0 it is pure downside on this panel.

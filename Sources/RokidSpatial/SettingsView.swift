@@ -352,9 +352,9 @@ struct SettingsView: View {
             Toggle("Adaptive VSync", isOn: $controller.adaptiveVSync)
                 .font(.caption)
             if controller.adaptiveVSync {
-                Text("Late frames show immediately (may tear) instead of waiting a whole refresh (always stutters). Judge by eye against the slow-frame counter.")
+                Text("Only useful when frames are being dropped. At a steady 60 fps this adds tearing during head turns and nothing else — leave it off unless the slow-frame counter is climbing.")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
