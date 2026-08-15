@@ -576,3 +576,65 @@ entirely as-is, including `maxWidth:` and the stream-activity logging;
 Standing decision recorded in ROADMAP: do not reintroduce Ultra-Wide
 as-is. Any future widescreen goes through Cinema v2 per-window capture,
 which is now both the video route and the only widescreen story.
+
+## SBS/stereo removed: the market agreed with the user's eyes (2026-08-15)
+
+The verdict, plainly: *"ตัด SBS ออกไปเลย เหมือนไม่ค่อยโอเคเท่าไหร่"* — cut SBS
+out entirely, it doesn't really feel okay. It is the same eye speaking as
+on 2026-08-12, when the freshly built SBS-90 mode was judged clearly
+deeper and clearly worse to live behind (vergence-accommodation: the
+birdbath fixes focus at ~6 m no matter where disparity says the screen
+is). In the three days since, the mode was never once used. A feature
+the author of the verdict does not reach for is not a feature; it is
+maintenance.
+
+What makes this closure more than a preference is the second reading.
+The SpaceWalker binary — and **correct the record: SpaceWalker is
+VITURE's app, not Rokid's; earlier notes in this file and in the plans
+called it the vendor's or Rokid's own** — ships **no user-facing stereo
+on macOS at all**. Its firmware enum carries the SBS modes, exactly as
+ours does, and not one code path reaches them. Instead it force-resets
+the glasses on connect, in its own words, to "force P6 enter mode2d …
+and save as preference". A commercial team with the same panel, the same
+optics and the same macOS constraints arrived where the user's eyes had
+already arrived: 2D, or nothing. The market did not merely permit the
+decision; it had made it first.
+
+Removed in `6ad08b8` (9 files, +189/−967): the `SBSMode` enum,
+`stereoActive` and `standaloneActive`, the per-eye renderer path, IPD in
+both its forms (the Settings slider and the `VirtualScreen` API), the
+Panel-mode picker, the `--sbs` debug flags, and the whole standalone
+wall machinery that existed only to serve them —
+`prepareStandalone`, `arrangeStandalone`, `unexpectedMirror`,
+`mirrorBuiltinOntoWorking`, `rehomeDockIfHidden` — with `SpaceWatch.swift`
+and `WindowRescue.swift` deleted outright. Two sources remain, Mirror Mac
+and Glasses only, both mono 2D 60 Hz on panel mode 0. There is no longer
+a mode in the app that changes the panel away from 0.
+
+Kept, deliberately. **Side screens survive complete** — 0/1/2 screens,
+Wide/Portrait/Stacked, the gap control and the wall watchdog: that is the
+daily driver and it never depended on stereo. **`RokidKit/DisplayMode.swift`,
+`Tools/rokid-display-mode` and `Scripts/rescue.sh` survive too**, which
+means panel modes 1–4 stay *reachable* — through the `--panel-mode` probe
+and the CLI — just not through the product. That distinction is the point:
+the modes remain available for recovery (a panel stuck in a mode you
+cannot read is fixed with `set 0`) and for research (any future
+perceptual test can still drive the hardware), while the app itself makes
+exactly one choice and makes it every time. **`ScreenCapture.swift` stays
+whole**, `refreshContentFilter` included — the stream-freeze fix was
+earned by a different investigation and outlives every feature that
+happened to be standing near it.
+
+Smoke-tested live the same afternoon (~14:00 local; log stamps UTC
+06:59–07:02). Plain glasses-only: `capture: 1920×1080 px @ 60 Hz from
+display 2`, 60 fps with zero slow frames. Side screens L+R: main display
+at 60 Hz plus `capture: 1920×1080 px @ 30 Hz from display 256/257` for the
+two virtuals, pacing 60/0, watchdog silent throughout. Both runs quit
+clean and restored clean — `restore(panel-only): setting panel to 2D,
+leaving mirroring alone` — with the daily driver put back (side screens
+off) at the end.
+
+Standing decision recorded in ROADMAP: do not rebuild stereo without a
+new eye-comfort finding. Nine hundred lines of the most intricate display
+choreography in this project turned out to be scaffolding around a
+question the eyes had already answered.

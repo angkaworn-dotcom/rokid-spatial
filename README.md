@@ -4,9 +4,8 @@ A spatial display driver for the **Rokid Max** on Apple Silicon Macs.
 
 Rokid does not ship AR Mode for macOS — their own compatibility page lists
 MacBooks as screen-casting only. So on a Mac the glasses are just a 1080p
-external monitor strapped to your face: the image is rigidly head-locked, it
-never sits still relative to the room, and it runs at 60 Hz. This project
-builds the missing piece.
+external monitor strapped to your face: the image is rigidly head-locked and
+never sits still relative to the room. This project builds the missing piece.
 
 ## What it does
 
@@ -69,24 +68,38 @@ goes wrong.
 
 - **Reads the glasses' IMU directly** over their vendor HID interface at
   ~440 Hz, and fuses it into a head-orientation estimate
-- **Unlocks 1920×1200 @ 120 Hz**, double the default 1080p60 refresh rate at
-  higher resolution
+- **Runs the panel in plain 2D at 1920×1080 @ 60 Hz** and leaves it there —
+  one mode, mono, every session (the higher panel modes were tried and
+  removed; see below)
+- **Up to two extra virtual side screens** — Wide, Portrait or Stacked, with
+  an adjustable gap — laid out as a wall around the main screen
 - **Renders the desktop as a virtual screen in space**, in two modes:
   - *smooth follow* — the screen trails your head with a deadzone, so small
     movements don't move it and large ones bring it along
   - *world-anchored* — the screen stays put in the room while you look around
 - **Adjustable screen distance, size and height**
 
-### Why no stereo mode?
+### Why no stereo mode, and no 90/120 Hz?
 
-The panel also supports 3840×1200 @ 90 Hz side-by-side, and an earlier
-version exposed it. It was removed after real use: the disparity at a 2.5 m
-screen distance is only about 1.4° — barely perceptible — while 120 against
-90 Hz is obvious the moment you turn your head, and in glasses-only mode SBS
-forces the whole desktop to 3840×1200, which halves per-eye sharpness. Three
-losses, no felt gain. The stereo render path survives in the code and the
-protocol side is documented in [PROTOCOL.md](PROTOCOL.md), should it ever
-earn its way back.
+The panel does more than the app asks of it: 1920×1200 @ 120 Hz, and
+3840×1200 @ 90 Hz side-by-side for stereo. Both were built, both were used
+in anger, and both were removed — the last of it on 2026-08-15.
+
+Stereo lost on comfort. The disparity at a 2.5 m screen distance is only
+about 1.4°, while the birdbath optics keep your eyes focused at ~6 m
+regardless, and that mismatch is eye strain you feel and depth you barely
+do. Independently, VITURE's own SpaceWalker app for macOS ships no
+user-facing stereo either — its firmware enum has the SBS modes and nothing
+reaches them; it force-resets the glasses to 2D on connect. The high refresh
+modes went with it: they only ever paid off inside the stereo/standalone
+arrangements, and the compositor would not hold the rate anyway (RESEARCH.md).
+120 Hz is now the Windows port's mission, not a Mac feature.
+
+So the app is mono, 2D, 60 Hz, panel mode 0, always. The panel modes
+themselves are still *reachable* — `rokid-display-mode` and the
+`--panel-mode` probe can drive modes 1–4 for recovery and research, and the
+protocol side stays documented in [PROTOCOL.md](PROTOCOL.md) — they are just
+not something the product chooses. The full post-mortem is in RESEARCH.md.
 
 ## Status
 
@@ -95,7 +108,7 @@ earn its way back.
 | USB/HID protocol reverse-engineering | ✅ done, see [PROTOCOL.md](PROTOCOL.md) |
 | IMU reader (`RokidKit/IMU.swift`) | ✅ working, ~440 Hz |
 | Sensor fusion (`RokidKit/Fusion.swift`) | ✅ working, drift ≈ 3.3 °/min in yaw |
-| Display mode control (`RokidKit/DisplayMode.swift`) | ✅ working, mode 4 verified |
+| Display mode control (`RokidKit/DisplayMode.swift`) | ✅ working, modes 0–4 verified — the app itself only ever uses 0 |
 | `rokid-probe` — raw packet dumper | ✅ |
 | `rokid-orient` — live orientation readout | ✅ |
 | Metal / ScreenCaptureKit renderer | ✅ builds and runs |
@@ -123,12 +136,12 @@ it, then quit and relaunch, because the capture stream cannot attach
 retroactively. Settings — including the chosen mode — persist across
 launches.
 
-What starting does depends on the mode. **Glasses only** switches the panel
-mode, leaves mirroring exactly as macOS wants it, and dims the built-in
-screen; quitting restores brightness and puts the panel back to 2D, and that
-is the whole story. **Mirror Mac** — and the SBS variants, which build a
-working virtual desktop — additionally un-mirror and rearrange the displays,
-and restore them on quit.
+What starting does depends on the mode. **Glasses only** makes sure the panel
+is in plain 2D, leaves mirroring exactly as macOS wants it, and dims the
+built-in screen; quitting restores brightness and leaves the panel in 2D, and
+that is the whole story. **Mirror Mac** additionally un-mirrors and rearranges
+the displays, and restores them on quit. Turning on **side screens** creates
+the extra virtual displays and lays out the wall, in either mode.
 
 Two things are deliberately *not* restored on exit from those arrangements,
 both learned the hard way:
@@ -136,9 +149,9 @@ both learned the hard way:
 - **Mirroring is never re-enabled.** The glasses normally arrive as the mirror
   *master*, which deactivates the built-in display — so faithfully restoring
   that state leaves nothing usable to look at.
-- **The panel always returns to 2D**, never to whatever mode it was found in.
-  Side-by-side only makes sense while something is rendering a separate image
-  per eye; without that, each eye gets half a desktop.
+- **The panel always ends in 2D**, never in whatever mode it was found in.
+  Nothing in the app renders per-eye any more, and a panel left side-by-side
+  without that gives each eye half a desktop.
 
 ### Calibrate once per session
 

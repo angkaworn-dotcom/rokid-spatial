@@ -148,15 +148,21 @@ Feature parity checklist for a first Windows release, in order:
    flip-to-flip with PresentMon (the Windows HUD equivalent).
 7. Side screens need an indirect display driver (IddCx) for virtual
    desktops — that is the Windows CGVirtualDisplay. Park until 1-6 work.
-8. SBS/stereo on Windows is gated on the vendor control transfer problem
-   (PORTING.md "The hard part") — but the user's daily driver is mono
-   60, and stereo caused them eye strain, so this is last, maybe never.
+8. ~~SBS/stereo on Windows~~ — **moot.** SBS was removed from the Mac app
+   2026-08-15 (eye strain, and VITURE's own Mac app ships no stereo
+   either — RESEARCH.md); the Windows port has no stereo scope at all.
+   PORTING.md's "The hard part: SBS mode on Windows" is history, not a
+   task. Parity target for Windows is mono 2D, side screens and the
+   comfort features.
 
 ## Standing decisions (do not silently reopen)
 
 - 120 Hz on Mac: closed, twice. Windows is the venue.
-- SBS as a default: no — eye strain (vergence-accommodation). Occasional
-  mode only.
+- SBS/stereo: REMOVED from the app 2026-08-15 (eye strain verdict
+  2026-08-12, user decision, and VITURE's own Mac app ships no stereo
+  either). Panel modes 1-4 remain reachable via the rokid-display-mode
+  CLI and --panel-mode for research; the app itself is mono 2D 60 only.
+  Do not rebuild stereo without a new eye-comfort finding.
 - The faint grey scroll-lines: the panel's own, in every mode, case
   closed (RESEARCH.md).
 - Temporal supersampling at 1:1: rejected by eye; mirror-mode re-test is
