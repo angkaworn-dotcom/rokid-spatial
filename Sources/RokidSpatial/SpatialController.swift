@@ -15,7 +15,7 @@ final class SpatialController: ObservableObject {
     @Published var statusIsError = false
     @Published var sampleRate = 0
     @Published var yaw: Float = 0
-    /// Rendered frames in the last second, and how many overshot the 120 Hz
+    /// Rendered frames in the last second, and how many overshot the frame
     /// deadline — the stutter metric.
     @Published var renderFPS = 0
     @Published var longFrames = 0
@@ -89,8 +89,7 @@ final class SpatialController: ObservableObject {
     /// How the side screens hang (SpaceWalker's layout picker: Displays Side
     /// by Side / Portrait-Landscape-Portrait / 3 Stacked Displays). Portrait
     /// creates the side desktops rotated 90°; Stacked hangs them above and
-    /// below. Plain glasses-only sessions only — the standalone variants'
-    /// wall keeps the parked displays above it, where Stacked would collide.
+    /// below.
     enum SideLayout: String, CaseIterable, Identifiable {
         case wide
         case portrait
@@ -133,7 +132,6 @@ final class SpatialController: ObservableObject {
     @Published var autoCalibrate = true { didSet { persist(autoCalibrate, "autoCalibrate") } }
     @Published var followSpeed: Float = 3.0 { didSet { screen.followSpeed = followSpeed; persist(followSpeed, "followSpeed") } }
     @Published var settleSpeed: Float = 0.7 { didSet { screen.settleSpeed = settleSpeed; persist(settleSpeed, "settleSpeed") } }
-    @Published var ipd: Float = 0.063 { didSet { screen.ipd = ipd; persist(ipd, "ipd") } }
     @Published var lookAhead: Float = 0 { didSet { renderer?.lookAhead = lookAhead; persist(lookAhead, "lookAhead") } }
     /// Anti-shake: display-pose smoothing time constant, seconds.
     @Published var steady: Float = 0.015 { didSet { renderer?.steady = steady; persist(steady, "steady") } }
@@ -152,8 +150,8 @@ final class SpatialController: ObservableObject {
     /// toggle rather than a decision made here.
     /// Temporal supersampling: accumulate reprojected frames so head
     /// micro-motion's sub-pixel phases average into more detail than any
-    /// single frame carries. Mono modes only; a neighbourhood clamp sheds
-    /// stale history the moment content moves.
+    /// single frame carries. A neighbourhood clamp sheds stale history the
+    /// moment content moves.
     @Published var temporalSS = false { didSet { renderer?.temporalSS = temporalSS; persist(temporalSS, "temporalSS") } }
     @Published var linearLight = false {
         didSet {
@@ -171,83 +169,6 @@ final class SpatialController: ObservableObject {
     @Published var peekAngle: Float = 35 { didSet { renderer?.peekAngle = peekAngle; persist(peekAngle, "peekAngle") } }
     /// Night-Shift-style warmth inside our render pipeline, 0 = off.
     @Published var eyeCare: Float = 0 { didSet { renderer?.eyeCare = eyeCare; persist(eyeCare, "eyeCare") } }
-    /// Glasses panel variants beyond the default 60 Hz 2D: stereo SBS at 60
-    /// or 90 (per-eye rendering with the IPD offset onto a separate working
-    /// virtual display), and plain 120 Hz (mode 3, no stereo — the glasses'
-    /// own 1920×1200 desktop captured directly). All of them run
-    /// *standalone*: no mirror set may touch the glasses or the sides, or
-    /// macOS harmonizes flips down to 60. Grey-line note (2026-08-12): the
-    /// faint scroll-ghost is the panel's own in every mode; 120's earlier
-    /// "obvious lines" verdict predates that finding and mixed in frame
-    /// duplication — it is being re-tested fairly here.
-    enum SBSMode: String, CaseIterable, Identifiable {
-        case off
-        case sbs60
-        case sbs90
-        case hz120
-
-        var id: String { rawValue }
-
-        var label: String {
-            switch self {
-            case .off: return "Off"
-            case .sbs60: return "SBS 60"
-            case .sbs90: return "SBS 90"
-            case .hz120: return "120 Hz"
-            }
-        }
-
-        var isStereo: Bool { self == .sbs60 || self == .sbs90 }
-
-        /// The panel mode carrying this variant.
-        var panelMode: DisplayMode {
-            switch self {
-            case .off: return .sameOnBoth
-            case .sbs60: return .stereo
-            case .sbs90: return .highRefreshRateSBS
-            case .hz120: return .highRefreshRate
-            }
-        }
-
-        var frameRate: Int {
-            switch self {
-            case .off, .sbs60: return 60
-            case .sbs90: return 90
-            case .hz120: return 120
-            }
-        }
-
-        /// Working-desktop (and side-screen) size for the stereo variants:
-        /// matches the per-eye raster.
-        var desktopSize: (width: Int, height: Int) {
-            self == .sbs90 ? (1920, 1200) : (1920, 1080)
-        }
-
-        var detail: String {
-            switch self {
-            case .off:
-                return ""
-            case .sbs60:
-                return "Stereo depth at 60 Hz. The MacBook desktop merges into the working one, so windows opened before Start follow you in. IPD slider under More."
-            case .sbs90:
-                return "Stereo depth at 90 Hz (the Station 2 mode) — smoothest motion with depth. Windows opened before Start stay on the hidden MacBook desktop until Stop."
-            case .hz120:
-                return "1920×1080 @ 120 Hz, no stereo — maximum motion clarity. Windows opened before Start stay on the hidden MacBook desktop until Stop."
-            }
-        }
-    }
-
-    @Published var sbsMode: SBSMode = .off { didSet { persist(sbsMode.rawValue, "sbsMode") } }
-
-    /// True when the session runs (or would run) one of the standalone
-    /// variants — no mirror allowed (SBS-60 excepts exactly one pair), wall
-    /// layout with parked displays, re-mirror on stop.
-    var standaloneActive: Bool { source == .glassesOnly && sbsMode != .off }
-
-    /// True for the stereo variants: per-eye rendering off a separate
-    /// working virtual display. 120 Hz is standalone but not stereo.
-    var stereoActive: Bool { standaloneActive && sbsMode.isStereo }
-
     @Published var motionLock: Float = 0 { didSet { screen.motionLock = motionLock; persist(motionLock, "motionLock") } }
     /// Angular gap between neighbouring screens, degrees. Zero makes the
     /// three screens one continuous wall.
@@ -317,7 +238,6 @@ final class SpatialController: ObservableObject {
         manager.log = { SpatialController.appendLog($0) }
         return manager
     }()
-    private let virtualDisplay = VirtualDisplay()
     private let capture = ScreenCapture()
     /// Index 0 = right side screen, 1 = left.
     private let sideDisplays = [VirtualDisplay(), VirtualDisplay()]
@@ -382,9 +302,6 @@ final class SpatialController: ObservableObject {
     private let frameClock = FrameClock()
     private var unhealthyTicks = 0
     private var mirrorRecoveryAttempts = 0
-    /// Last Space id seen on the captured display, polled by healthCheck().
-    /// 0 means "not observed yet" — see SpaceWatch.
-    private var lastCaptureSpaceID: UInt64 = 0
     private var watchdogArmsAt = Date.distantPast
 
     /// True from the moment Start is accepted until the session is running or
@@ -411,20 +328,14 @@ final class SpatialController: ObservableObject {
     /// the fix takes longer than a second.
     private var layoutFixInFlight = false
 
-    /// Dock bounces this session, capped — the bounce restarts the user's
-    /// Dock, so a stubborn window server must not turn it into a strobe.
-    private var dockBounces = 0
-
     /// Set when the Mac goes to sleep mid-session: the session is stopped
     /// cleanly before sleep and started again once the glasses re-enumerate
     /// after wake. Without this the watchdog saw the sleeping capture stream
     /// as a fault and tore the session down for good.
     private var resumeOnWake = false
 
-    /// 60 Hz mode-0 is the daily driver: clean image, 1:1 pacing. The
-    /// standalone opt-ins run their panel's own rate — 60/90 for the SBS
-    /// variants, 120 for mode 3.
-    private var frameRate: Int { source == .glassesOnly ? sbsMode.frameRate : 60 }
+    /// 60 Hz mode-0 is the only rate the app runs: clean image, 1:1 pacing.
+    private let frameRate = 60
 
     /// Capture rates adapt to Low Power Mode. On a downclocked machine the
     /// window server cannot both produce capture frames at full rate and
@@ -457,16 +368,6 @@ final class SpatialController: ObservableObject {
         if d.object(forKey: "metalHUD") != nil { metalHUD = d.bool(forKey: "metalHUD") }
         // The env override never persists: observers don't fire in init.
         if ProcessInfo.processInfo.environment["MTL_HUD_ENABLED"] == "1" { metalHUD = true }
-        if let v = SBSMode(rawValue: d.string(forKey: "sbsMode") ?? "") {
-            sbsMode = v
-        } else if d.bool(forKey: "sbs90") {
-            // The short-lived Bool this picker replaced, same day.
-            sbsMode = .sbs90
-        }
-        // 120 Hz left the picker (unsteady on this Mac; goal moved to the
-        // Windows port). A remembered 120 would be unswitchable-away-from.
-        // `--sbs=120` below still opts a research session in deliberately.
-        if sbsMode == .hz120 { sbsMode = .off }
         if let v = SideScreens(rawValue: d.string(forKey: "sideScreens") ?? "") {
             sideScreens = v
         }
@@ -484,7 +385,6 @@ final class SpatialController: ObservableObject {
         load("deadzone", into: &deadzone)
         load("followSpeed", into: &followSpeed)
         load("settleSpeed", into: &settleSpeed)
-        load("ipd", into: &ipd)
         load("lookAhead", into: &lookAhead)
         load("steady", into: &steady)
         load("motionLock", into: &motionLock)
@@ -512,7 +412,6 @@ final class SpatialController: ObservableObject {
         screen.deadzoneDegrees = deadzone
         screen.followSpeed = followSpeed
         screen.settleSpeed = settleSpeed
-        screen.ipd = ipd
         screen.motionLock = motionLock
         screen.smoothFollowSpeed = glideSpeed
 
@@ -586,9 +485,7 @@ final class SpatialController: ObservableObject {
         let captureID: CGDirectDisplayID?
         switch source {
         case .mirror: captureID = displays.deskDisplayID
-        case .glassesOnly:
-            captureID = stereoActive ? virtualDisplay.displayID
-                                     : displays.glassesDisplayID
+        case .glassesOnly: captureID = displays.glassesDisplayID
         }
         guard let captureID else { return }
         Task {
@@ -596,12 +493,9 @@ final class SpatialController: ObservableObject {
             try? await capture.start(
                 displayID: captureID,
                 frameRate: captureRate,
-                // The exclusion exists to break same-display recursion. A working
-                // virtual desktop is a *different* display than the overlay's, so
-                // it is unnecessary there — and excluding our own window on a
-                // virtual display has been observed to black out fullscreen-video
-                // Spaces (see RESEARCH.md 2026-08-15).
-                excludingWindowNumber: source == .glassesOnly && !stereoActive
+                // The exclusion exists to break same-display recursion:
+                // glasses-only captures the very display the overlay covers.
+                excludingWindowNumber: source == .glassesOnly
                     ? window?.windowNumber : nil,
                 showsCursor: source != .glassesOnly
             )
@@ -616,59 +510,6 @@ final class SpatialController: ObservableObject {
                                                  showsCursor: false)
                 }
             }
-        }
-    }
-
-    /// Re-open the main capture stream after a Space transition.
-    ///
-    /// Measured 2026-08-15: when a fullscreen-video Space engages on a
-    /// captured *virtual* display, our long-lived SCStream freezes — it keeps
-    /// delivering .complete BGRA frames at the full rate, but the content is a
-    /// stale surface (mean luma pinned for tens of seconds), so the glasses
-    /// show what reads as a black screen. A stream created fresh on the same
-    /// display in the same seconds sees the live video, so the cure is simply
-    /// to bounce the stream. Only the stereo working-desktop path is
-    /// affected; plain glasses-only and mirror capture physical displays,
-    /// where fullscreen works, and are left alone. Side captures are untouched.
-    ///
-    /// The stop/start bounce only bought ~6 s before the freeze returned. The
-    /// vendor's own app (same SCK + CGVirtualDisplay stack, no such bug)
-    /// recovers by pushing a fresh content filter onto the *live* stream
-    /// instead, so that is what we do now — `useHardBounce` flips back to the
-    /// old path in one edit if the in-place refresh proves not to be enough.
-    private static let useHardBounce = false
-
-    private func bounceCaptureForSpaceChange() {
-        guard isRunning, stereoActive else { return }
-        guard Self.useHardBounce else {
-            Task {
-                await capture.refreshContentFilter()
-                frameClock.mark()
-                Self.appendLog("space changed — content filter refreshed (fullscreen video fix)")
-            }
-            return
-        }
-        let captureID: CGDirectDisplayID?
-        switch source {
-        case .mirror: captureID = displays.deskDisplayID
-        case .glassesOnly:
-            captureID = stereoActive ? virtualDisplay.displayID
-                                     : displays.glassesDisplayID
-        }
-        guard let captureID else { return }
-        Task {
-            await capture.stop()
-            try? await capture.start(
-                displayID: captureID,
-                frameRate: captureRate,
-                // Not on a working virtual desktop — see the note in
-                // adaptCaptureToPowerState().
-                excludingWindowNumber: source == .glassesOnly && !stereoActive
-                    ? window?.windowNumber : nil,
-                showsCursor: source != .glassesOnly
-            )
-            frameClock.mark()
-            Self.appendLog("space changed — capture stream bounced (fullscreen video fix)")
         }
     }
 
@@ -737,44 +578,16 @@ final class SpatialController: ObservableObject {
 
         isStarting = true
 
-        // The virtual display has to exist before anything else is arranged.
-        // Adding a display is itself a reconfiguration, and macOS responds to
-        // those by reinstating its remembered arrangement — mirroring included.
-        // Creating it after un-mirroring simply undoes the un-mirroring.
-        // The stereo variants' working desktop obeys the same rule: create
-        // first, fight once. (120 Hz captures the glasses' own desktop and
-        // needs no extra display.)
-        if stereoActive {
-            setStatus("Creating the \(frameRate) Hz working desktop…")
-            do {
-                // The size matches the per-eye panel raster exactly, and
-                // the rate matches the panel: a slower virtual display in
-                // the set drags the whole composition down (measured
-                // 2026-08-12).
-                let size = sbsMode.desktopSize
-                try virtualDisplay.create(width: size.width, height: size.height,
-                                          hiDPI: false,
-                                          refreshRate: Double(frameRate))
-            } catch {
-                setStatus("\(error)", isError: true)
-                isStarting = false
-                return
-            }
-        }
-
-        let displayMode: DisplayMode = standaloneActive ? sbsMode.panelMode : .sameOnBoth
-        setStatus(standaloneActive ? "Switching the glasses to \(sbsMode.label)…"
-                                   : "Switching the glasses to 60 Hz…")
+        let displayMode: DisplayMode = .sameOnBoth
+        setStatus("Switching the glasses to 60 Hz…")
 
         // Display reconfiguration blocks for a few seconds while the panel
         // renegotiates, so keep it off the main thread.
         // Applied to the glasses display after the panel settles; the
         // requested size falls back to the nearest one the panel offers.
-        Task.detached(priority: .userInitiated) { [displays, source, standaloneActive] in
+        Task.detached(priority: .userInitiated) { [displays, source] in
             do {
-                if standaloneActive {
-                    try displays.prepareStandalone(mode: displayMode)
-                } else if source == .glassesOnly {
+                if source == .glassesOnly {
                     try displays.prepareGlassesOnly(mode: displayMode)
                 } else {
                     // Let macOS enumerate the new display before rearranging.
@@ -795,34 +608,21 @@ final class SpatialController: ObservableObject {
         // what the glasses can resolve, so nothing is downscaled on the way to
         // your eye, and the physical desktop is left completely alone.
         let captureID: CGDirectDisplayID
-        if stereoActive {
-            // The SBS panel modes' own desktops are wide slivers (1920×600
-            // or ×540 points) and unusable as a workspace; the user works on
-            // the matching-rate virtual display and the overlay projects it
-            // once per eye. (120 Hz has a real 1920×1200 desktop and falls
-            // through to the glasses-capture path below.)
-            guard let id = virtualDisplay.displayID else {
-                abort("The working desktop did not report a display ID.")
+        switch source {
+        case .mirror:
+            guard let deskID = displays.deskDisplayID else {
+                abort("No desktop display to mirror.")
+                return
+            }
+            captureID = deskID
+        case .glassesOnly:
+            // Capture the glasses' own display — the overlay is excluded
+            // from the capture per-window, which breaks the recursion.
+            guard let id = displays.glassesDisplayID else {
+                abort("The glasses display disappeared during setup.")
                 return
             }
             captureID = id
-        } else {
-            switch source {
-            case .mirror:
-                guard let deskID = displays.deskDisplayID else {
-                    abort("No desktop display to mirror.")
-                    return
-                }
-                captureID = deskID
-            case .glassesOnly:
-                // Capture the glasses' own display — the overlay is excluded
-                // from the capture per-window, which breaks the recursion.
-                guard let id = displays.glassesDisplayID else {
-                    abort("The glasses display disappeared during setup.")
-                    return
-                }
-                captureID = id
-            }
         }
 
         if source != .glassesOnly {
@@ -833,16 +633,9 @@ final class SpatialController: ObservableObject {
             // Side displays are created at exactly the main desktop's
             // effective size, so all screens match and windows keep their
             // size when dragged across. Failure never ends the session.
-            // Stereo: sides match the working desktop, not the glasses' wide
-            // sliver. All virtual displays run at the panel's rate — a slower
-            // member drags composition down even unmirrored. (120 Hz and
-            // plain glasses-only both use the glasses' real desktop size.)
-            let effective = stereoActive ? sbsMode.desktopSize
-                                         : displays.glassesDesktopSize
-            // Portrait layout rotates the side desktops 90° — the P-L-P
-            // wall. Plain sessions only; the standalone variants match the
-            // panel exactly.
-            let sideSize = (!standaloneActive && sideLayout == .portrait)
+            let effective = displays.glassesDesktopSize
+            // Portrait layout rotates the side desktops 90° — the P-L-P wall.
+            let sideSize = sideLayout == .portrait
                 ? (width: effective.height, height: effective.width)
                 : effective
             for index in sideScreens.indices {
@@ -874,9 +667,6 @@ final class SpatialController: ObservableObject {
             abort("Could not create the Metal renderer.")
             return
         }
-        // SBS: the framebuffer holds both eyes across its width; the stereo
-        // path renders per-eye viewports with ±ipd/2 offsets.
-        renderer.stereo = stereoActive
         renderer.lookAhead = lookAhead
         renderer.steady = steady
         renderer.antiMoire = antiMoire
@@ -889,7 +679,7 @@ final class SpatialController: ObservableObject {
         renderer.eyeCare = eyeCare
         renderer.targetFPS = frameRate
         renderer.sideGap = screenGap * .pi / 180
-        renderer.sideStacked = !standaloneActive && sideLayout == .stacked
+        renderer.sideStacked = sideLayout == .stacked
         self.renderer = renderer
         pushAxisLocks()
 
@@ -915,9 +705,9 @@ final class SpatialController: ObservableObject {
                 try await capture.start(
                     displayID: captureID,
                     frameRate: captureRate,
-                    // Not on a working virtual desktop — see the note at the
+                    // Breaks the same-display recursion — see the note at the
                     // first call site.
-                    excludingWindowNumber: source == .glassesOnly && !stereoActive
+                    excludingWindowNumber: source == .glassesOnly
                         ? window?.windowNumber : nil,
                     // In glasses-only mode the renderer draws its own cursor;
                     // SCK's would be a duplicate whenever the system cursor
@@ -940,7 +730,6 @@ final class SpatialController: ObservableObject {
         frameClock.mark()
         unhealthyTicks = 0
         mirrorRecoveryAttempts = 0
-        lastCaptureSpaceID = 0
         captureRestarts = 0
         // Display reconfiguration ripples for several seconds after startup.
         // Watching during that window produces false alarms and tears down a
@@ -951,24 +740,8 @@ final class SpatialController: ObservableObject {
             reason: "Realtime XR rendering")
         isRunning = true
         isStarting = false
-        // The standalone variants rescue scattered windows via the
-        // Accessibility API; surface the consent prompt now, while the
-        // user is right here starting the session. One system dialog, only
-        // until granted (consent sticks to the stable dev signature).
-        if standaloneActive, !WindowRescue.hasPermission {
-            WindowRescue.requestPermission()
-        }
-        // Report what is actually being captured. The stereo sessions capture
-        // a working virtual display, not the glasses' own raster — reading
-        // glassesPixelSize unconditionally made the status line announce a
-        // size nothing was streaming (observed live 2026-08-15).
-        let size: CGSize
-        if stereoActive {
-            let desktop = sbsMode.desktopSize
-            size = CGSize(width: desktop.width, height: desktop.height)
-        } else {
-            size = displays.glassesPixelSize
-        }
+        // Report what is actually being captured.
+        let size = displays.glassesPixelSize
         setStatus(String(format: "Running — %.0f×%.0f @ %d Hz",
                          size.width, size.height, frameRate))
         startRateTimer()
@@ -981,75 +754,35 @@ final class SpatialController: ObservableObject {
         // paints its own sprite at the same position instead, so exactly one
         // cursor exists and it lives on the virtual screen.
         if source == .glassesOnly {
-            // SBS-60 keeps the built-in lit: it mirrors the working desktop,
-            // so the laptop shows exactly what the glasses show — take the
-            // glasses off and the work is still in front of you. Dimming it
-            // made everything vanish from the physical screen the moment the
-            // desktops merged (user hit the emergency stop over it, live).
-            // The other variants park it dark as before.
-            if sbsMode != .sbs60, let deskID = displays.deskDisplayID {
+            if let deskID = displays.deskDisplayID {
                 savedBrightness = BuiltinBrightness.get(deskID) ?? 0.5
                 BuiltinBrightness.set(deskID, to: 0)
             }
 
-            if standaloneActive {
-                // The standalone wall in one batched reconfiguration: the
-                // main desktop centred at the origin (the working virtual
-                // display for stereo, the glasses themselves for 120 Hz),
-                // sides flush left/right, the rest parked below. And no
-                // mirror touching the glasses or sides — that would
-                // harmonize the flip rate straight back down to 60.
-                let sides = sideScreens.indices.compactMap { index -> (id: CGDirectDisplayID, placement: DisplayManager.SidePlacement)? in
-                    guard let id = sideDisplays[index].displayID else { return nil }
-                    return (id, sidePlacement(index))
+            // Side screens, for those whose displays came up, placed so
+            // the pointer leaves the main desktop on the edge where the
+            // eye sees the screen — beside it for Wide/Portrait, through
+            // the top/bottom for Stacked. Position everything first,
+            // then re-assert the main desktop's size — every
+            // reconfiguration invites macOS to revert it.
+            for index in sideScreens.indices {
+                guard let sideID = sideDisplays[index].displayID else { continue }
+                switch sidePlacement(index) {
+                case .right: displays.positionToRight(sideID, of: captureID)
+                case .left: displays.positionToLeft(sideID, of: captureID)
+                case .above: displays.positionAbove(sideID, of: captureID)
+                case .below: displays.positionBelow(sideID, of: captureID)
                 }
-                let parked = standaloneParked(excluding: captureID)
-                let mergeBuiltin = sbsMode == .sbs60
-                await Task.detached { [displays] in
-                    // Creating the sides invites a remembered-arrangement
-                    // re-apply, and the mirror it brings back is not
-                    // necessarily onto the glasses (seen live: built-in
-                    // mirrored onto the left side). Clear every mirror
-                    // first — a mirrored display cannot be repositioned,
-                    // so the layout fix would loop forever against it.
-                    _ = displays.reassertUnmirrored()
-                    displays.fixWallLayout(main: captureID, sides: sides, parked: parked)
-                    if mergeBuiltin {
-                        // SBS-60's stranded-window fix: the built-in joins
-                        // the *working desktop's* mirror set, so its desktop
-                        // — and every window open before Start — merges into
-                        // the one the glasses show ("แอพหาย", seen live).
-                        // Only at 60: a 60 Hz member would drag the 90/120
-                        // variants' content rate down.
-                        _ = displays.mirrorBuiltinOntoWorking(captureID)
-                    }
-                }.value
-            } else {
-                // Side screens, for those whose displays came up, placed so
-                // the pointer leaves the main desktop on the edge where the
-                // eye sees the screen — beside it for Wide/Portrait, through
-                // the top/bottom for Stacked. Position everything first,
-                // then re-assert the main desktop's size — every
-                // reconfiguration invites macOS to revert it.
-                for index in sideScreens.indices {
-                    guard let sideID = sideDisplays[index].displayID else { continue }
-                    switch sidePlacement(index) {
-                    case .right: displays.positionToRight(sideID, of: captureID)
-                    case .left: displays.positionToLeft(sideID, of: captureID)
-                    case .above: displays.positionAbove(sideID, of: captureID)
-                    case .below: displays.positionBelow(sideID, of: captureID)
-                    }
-                }
-                if !sideScreens.indices.isEmpty {
-                    await Task.detached { [displays] in
-                        displays.reapplyDesktopSize()
-                    }.value
-                }
-                // Creating and positioning the side displays invites macOS to
-                // re-apply its remembered (unmirrored) arrangement; put the
-                // built-in back into the mirror set before capture starts.
-                _ = displays.reassertGlassesOnlyMirror()
             }
+            if !sideScreens.indices.isEmpty {
+                await Task.detached { [displays] in
+                    displays.reapplyDesktopSize()
+                }.value
+            }
+            // Creating and positioning the side displays invites macOS to
+            // re-apply its remembered (unmirrored) arrangement; put the
+            // built-in back into the mirror set before capture starts.
+            _ = displays.reassertGlassesOnlyMirror()
             for index in sideScreens.indices {
                 guard let sideID = sideDisplays[index].displayID else { continue }
                 let sideCapture = sideCaptures[index]
@@ -1165,31 +898,15 @@ final class SpatialController: ObservableObject {
 
     private let mousePoller = MousePoller()
 
-    /// Desktops the user cannot currently see: the parked dark displays of a
-    /// standalone session, or — in the extended sources — the
-    /// glasses' desktop, which sits under the opaque overlay. The settings-window
-    /// rescue polls this; a window on any of these reads as "won't open".
+    /// Desktops the user cannot currently see: in the mirror source, the
+    /// glasses' desktop, which sits under the opaque overlay. Glasses-only
+    /// has no hidden desktop — the built-in is a mirror slave. The
+    /// settings-window rescue polls this; a window on any of these reads as
+    /// "won't open".
     func hiddenDisplayIDs() -> [CGDirectDisplayID] {
         guard isRunning else { return [] }
-        if source != .glassesOnly {
-            return [displays.glassesDisplayID].compactMap { $0 }
-        }
-        guard standaloneActive else { return [] }
-        let mainID = stereoActive ? virtualDisplay.displayID
-                                  : displays.glassesDisplayID
-        guard let mainID else { return [] }
-        return standaloneParked(excluding: mainID)
-    }
-
-    /// Displays a standalone session parks below the wall: the glasses'
-    /// sliver desktop (stereo variants only — at 120 Hz the glasses ARE the
-    /// wall's main) and the built-in — except in SBS-60, where the
-    /// built-in is a mirror slave of the working desktop and has no
-    /// place of its own.
-    private func standaloneParked(excluding mainID: CGDirectDisplayID) -> [CGDirectDisplayID] {
-        [displays.glassesDisplayID,
-         sbsMode == .sbs60 ? nil : displays.deskDisplayID]
-            .compactMap { $0 }.filter { $0 != mainID }
+        guard source != .glassesOnly else { return [] }
+        return [displays.glassesDisplayID].compactMap { $0 }
     }
 
     /// The layout used while running. Order matters: the glasses' display goes
@@ -1210,7 +927,6 @@ final class SpatialController: ObservableObject {
         // in one debugging session, indistinguishable from a mystery fault.
         // It was the Stop button.
         Self.appendLog("Stop — tearing down")
-        lastCaptureSpaceID = 0
         Task {
             await capture.stop()
             for sideCapture in sideCaptures { await sideCapture.stop() }
@@ -1220,9 +936,8 @@ final class SpatialController: ObservableObject {
             isRunning = false
             if source == .glassesOnly {
                 // Mirroring stays — it is the desired end state, so there is
-                // no enforcement wait and stop is immediate. The standalone
-                // experiment re-mirrors first to land in the same state.
-                displays.restorePanelOnly(remirror: standaloneActive)
+                // no enforcement wait and stop is immediate.
+                displays.restorePanelOnly()
                 setStatus("Idle")
             } else {
                 setStatus("Restoring displays…")
@@ -1260,19 +975,17 @@ final class SpatialController: ObservableObject {
             let captureID: CGDirectDisplayID?
             switch self.source {
             case .mirror: captureID = self.displays.deskDisplayID
-            case .glassesOnly:
-                captureID = self.stereoActive ? self.virtualDisplay.displayID
-                                             : self.displays.glassesDisplayID
+            case .glassesOnly: captureID = self.displays.glassesDisplayID
             }
             guard let captureID else { return }  // the watchdog handles this
             do {
                 try await self.capture.start(
                     displayID: captureID,
                     frameRate: self.captureRate,
-                    // Not on a working virtual desktop — see the note at the
-                    // first call site.
+                    // Breaks the same-display recursion — see the note at
+                    // the first call site.
                     excludingWindowNumber: self.source == .glassesOnly
-                        && !self.stereoActive ? self.window?.windowNumber : nil,
+                        ? self.window?.windowNumber : nil,
                     showsCursor: self.source != .glassesOnly
                 )
                 self.frameClock.mark()
@@ -1316,7 +1029,7 @@ final class SpatialController: ObservableObject {
         isRunning = false
         if source == .glassesOnly {
             // Mirroring is the desired end state here: no fight, no helper.
-            displays.restorePanelOnly(remirror: standaloneActive)
+            displays.restorePanelOnly()
             return
         }
         do {
@@ -1342,7 +1055,7 @@ final class SpatialController: ObservableObject {
         restoreBrightness()
         DockAutoHide.restore()
         if source == .glassesOnly {
-            displays.restorePanelOnly(remirror: standaloneActive)
+            displays.restorePanelOnly()
         } else {
             displays.restore()
         }
@@ -1353,7 +1066,6 @@ final class SpatialController: ObservableObject {
     private func teardown() {
         // Take the virtual displays down first: any windows on them need a
         // real screen to fall back to, and that has to still exist.
-        virtualDisplay.destroy()
         sideDisplays.forEach { $0.destroy() }
         cursorTimer?.invalidate()
         cursorTimer = nil
@@ -1462,10 +1174,9 @@ final class SpatialController: ObservableObject {
     }
 
     /// Where side screen `index` (0 = "Right", 1 = the second one) hangs.
-    /// Stacked maps them to above/below; the standalone variants' wall is
-    /// always horizontal, because the parked displays own the space above.
+    /// Stacked maps them to above/below.
     private func sidePlacement(_ index: Int) -> DisplayManager.SidePlacement {
-        if !standaloneActive, sideLayout == .stacked {
+        if sideLayout == .stacked {
             return index == 0 ? .above : .below
         }
         return index == 0 ? .right : .left
@@ -1690,28 +1401,12 @@ final class SpatialController: ObservableObject {
                         self.pacingWindow.removeAll()
                     }
                 }
-                // Plain glasses-only has one display — nowhere to get
-                // stranded. The standalone variants have hidden desktops
-                // (the glasses' sliver; the parked dark built-in for 90/120)
-                // and macOS's re-applies scatter windows onto them (seen
-                // live: Discord on the sliver); list their owners.
-                self.strandedApps = {
-                    if self.source != .glassesOnly {
-                        return self.displays.strandedWindowOwners()
-                    }
-                    guard self.standaloneActive else { return [] }
-                    let mainID = self.stereoActive ? self.virtualDisplay.displayID
-                                                   : self.displays.glassesDisplayID
-                    guard let mainID else { return [] }
-                    var owners: [String] = []
-                    for hidden in self.standaloneParked(excluding: mainID) {
-                        for owner in self.displays.strandedWindowOwners(on: hidden)
-                        where !owners.contains(owner) {
-                            owners.append(owner)
-                        }
-                    }
-                    return owners
-                }()
+                // Glasses-only has one visible desktop — nowhere to get
+                // stranded. The mirror source hides the glasses' own desktop
+                // under the overlay; list whatever landed there.
+                self.strandedApps = self.source == .glassesOnly
+                    ? []
+                    : self.displays.strandedWindowOwners()
                 if let renderer = self.renderer, self.capture.pointWidth > 0 {
                     self.pixelScale = renderer.renderedWidth / Float(self.capture.pointWidth)
                 }
@@ -1745,48 +1440,20 @@ final class SpatialController: ObservableObject {
     private func healthCheck() {
         guard isRunning, Date() >= watchdogArmsAt else { return }
 
-        // Space transitions on the captured virtual display, polled rather
-        // than observed — activeSpaceDidChangeNotification does not fire for
-        // the fullscreen-video transition that freezes the stream (measured
-        // live 2026-08-15). A space id of 0 means "unknown"; stay inert.
-        if stereoActive, let captureID = virtualDisplay.displayID {
-            let spaceID = SpaceWatch.currentSpaceID(forDisplay: captureID)
-            if spaceID != 0, spaceID != lastCaptureSpaceID {
-                if lastCaptureSpaceID != 0 {
-                    Self.appendLog("space: display space changed (\(lastCaptureSpaceID) → \(spaceID)) — refreshing the capture stream")
-                    bounceCaptureForSpaceChange()
-                }
-                lastCaptureSpaceID = spaceID
-            }
-        }
-
         var problems: [String] = []
 
         if let glassesID = displays.glassesDisplayID {
-            // Modes that must stay unmirrored (extended sources, the
-            // standalone variants) treat an unexpected mirror as a fault to
-            // undo; plain glasses-only treats the mirror as the desired
-            // state. SBS-60 allows exactly one pair — built-in as slave of the working desktop (the stranded-window
-            // fix); anything else harmonizes the flip rate or pins a display
-            // the wall needs.
-            let allowedMaster = sbsMode == .sbs60 ? virtualDisplay.displayID : nil
-            if source != .glassesOnly || standaloneActive,
-               standaloneActive ? displays.unexpectedMirror(allowedMaster: allowedMaster)
-                                : CGDisplayIsInMirrorSet(glassesID) != 0 {
+            // The mirror source must stay unmirrored — an unexpected mirror
+            // there is a fault to undo; glasses-only treats the mirror as
+            // the desired state.
+            if source != .glassesOnly, CGDisplayIsInMirrorSet(glassesID) != 0 {
                 // Try to undo it before treating it as fatal — macOS often
                 // reinstates mirroring transiently while a reconfiguration
                 // settles, and recovering beats tearing the session down.
                 mirrorRecoveryAttempts += 1
                 if mirrorRecoveryAttempts <= 2, displays.reassertUnmirrored() {
-                    // Blanket un-mirroring also removed the wanted pair of
-                    // SBS-60; put it straight back.
-                    if let allowedMaster {
-                        _ = displays.mirrorBuiltinOntoWorking(allowedMaster)
-                    }
-                    // The re-apply also scrambled the arrangement. The
-                    // standalone wall is put back by the layout check below on the
-                    // next tick; the extended sources fix theirs here.
-                    if !standaloneActive { applyArrangement() }
+                    // The re-apply also scrambled the arrangement; fix it here.
+                    applyArrangement()
                     setStatus("macOS re-enabled mirroring; un-mirrored it again.")
                     unhealthyTicks = 0
                     return
@@ -1796,15 +1463,11 @@ final class SpatialController: ObservableObject {
             if CGDisplayIsActive(glassesID) == 0 {
                 problems.append("the glasses display went inactive")
             }
-            // The inverse fight: plain glasses-only *wants* the built-in
-            // mirrored (dark, no second desktop), and macOS keeps re-applying
-            // the unmirrored arrangement it remembered from the standalone
-            // experiments. Capped so a truly stubborn window server cannot
-            // make this loop forever. Never in the standalone variants,
-            // whose built-in is either parked or a mirror slave of the
-            // working desktop — re-mirroring onto the glasses here would
-            // fight the arrangement once a second.
-            if source == .glassesOnly, !standaloneActive,
+            // The inverse fight: glasses-only *wants* the built-in mirrored
+            // (dark, no second desktop), and macOS keeps re-applying an
+            // unmirrored arrangement it remembers. Capped so a truly stubborn
+            // window server cannot make this loop forever.
+            if source == .glassesOnly,
                mirrorRecoveryAttempts <= 4,
                displays.reassertGlassesOnlyMirror() {
                 mirrorRecoveryAttempts += 1
@@ -1813,37 +1476,22 @@ final class SpatialController: ObservableObject {
                 unhealthyTicks = 0
                 return
             }
-            // The merge mirror of SBS-60 can fall out on a remembered
-            // re-apply, resurfacing the built-in as its own desktop and
-            // re-stranding windows there. Put it back, capped like the other fights.
-            if let allowedMaster, mirrorRecoveryAttempts <= 4,
-               displays.mirrorBuiltinOntoWorking(allowedMaster) {
-                mirrorRecoveryAttempts += 1
-                unhealthyTicks = 0
-                return
-            }
             // The main screen stays at the centre of the wall. When macOS
             // re-applies a remembered arrangement that scatters the displays,
             // put them back and re-derive the cursor mapping, whose display
-            // bounds were captured at attach time. In SBS the wall's main is
-            // the working desktop, and the glasses (+ the built-in, where it
-            // is not a mirror slave) park below it.
+            // bounds were captured at attach time.
             if source == .glassesOnly, !layoutFixInFlight {
                 let sides = sideScreens.indices.compactMap { index -> (id: CGDirectDisplayID, placement: DisplayManager.SidePlacement)? in
                     guard let id = sideDisplays[index].displayID else { return nil }
                     return (id, sidePlacement(index))
                 }
-                let mainID = stereoActive ? virtualDisplay.displayID : glassesID
-                let parked = standaloneActive
-                    ? (mainID.map { standaloneParked(excluding: $0) } ?? [])
-                    : []
-                if let mainID,
-                   displays.wallLayoutIsBroken(main: mainID, sides: sides, parked: parked) {
+                let mainID = glassesID
+                if displays.wallLayoutIsBroken(main: mainID, sides: sides, parked: []) {
                     layoutFixInFlight = true
                     Self.appendLog("layout: the wall drifted — recentring the main screen")
                     Task {
                         await Task.detached { [displays] in
-                            displays.fixWallLayout(main: mainID, sides: sides, parked: parked)
+                            displays.fixWallLayout(main: mainID, sides: sides, parked: [])
                         }.value
                         if let renderer = self.renderer {
                             self.attachRenderedCursor(to: renderer, displayID: mainID)
@@ -1852,28 +1500,6 @@ final class SpatialController: ObservableObject {
                     }
                     unhealthyTicks = 0
                     return
-                }
-                // Reaching here means the wall is settled this tick — the
-                // right moment for the visibility rescues. Bounced or moved
-                // too early they just land on the still-scrambled
-                // arrangement again (seen live).
-                if standaloneActive, let mainID {
-                    let hidden = standaloneParked(excluding: mainID)
-                    if dockBounces < 3,
-                       displays.rehomeDockIfHidden(hiddenDisplays: hidden) {
-                        dockBounces += 1
-                    }
-                    // "Everything on my screen must not disappear": move any
-                    // window macOS scattered onto a hidden desktop back to
-                    // the wall's centre. Needs the one-time Accessibility
-                    // consent; without it the Settings list still names the
-                    // hidden apps.
-                    if !strandedApps.isEmpty, WindowRescue.hasPermission {
-                        _ = WindowRescue.rescueWindows(
-                            from: hidden.map { CGDisplayBounds($0) },
-                            to: CGDisplayBounds(mainID)
-                        ) { Self.appendLog($0) }
-                    }
                 }
             }
         } else {
@@ -1916,7 +1542,7 @@ final class SpatialController: ObservableObject {
         restoreBrightness()
         DockAutoHide.restore()
         if source == .glassesOnly {
-            displays.restorePanelOnly(remirror: standaloneActive)
+            displays.restorePanelOnly()
         } else {
             displays.restore()
         }

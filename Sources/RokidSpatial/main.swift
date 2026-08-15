@@ -22,11 +22,9 @@ if CommandLine.arguments.contains("--restore-displays") {
 
 // Debug probe: switch the panel to a numbered mode (see DisplayMode), wait
 // for enumeration, print every desktop mode macOS then offers, and exit.
-// `--panel-mode=4` was added to scope the Station-2-style 90 Hz SBS route.
-// `--hold=N` keeps the mode up for N seconds before restoring — long enough
-// to drag a window around and judge by eye whether the 120 Hz-mode faint
-// grey lines also afflict the 90 Hz SBS mode. (In SBS the desktop appears
-// sliced in half, one half per eye — that's expected; only the lines matter.)
+// A research tool only: the app itself runs the panel in mode 0 (plain 2D
+// 60 Hz) and nothing else. `--hold=N` keeps the mode up for N seconds before
+// restoring, long enough to judge a mode by eye.
 if let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--panel-mode=") }),
    let raw = UInt16(arg.dropFirst("--panel-mode=".count)),
    let mode = DisplayMode(rawValue: raw) {

@@ -1,4 +1,4 @@
-// Draws the captured desktop as a quad floating in space, once per eye.
+// Draws the captured desktop as a quad floating in space.
 //
 // Shaders are compiled from source at runtime rather than from a .metal file,
 // which means the project builds with only the Command Line Tools installed —
@@ -281,8 +281,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     var linearLight = false
 
     /// Temporal supersampling: accumulate frames in a reprojected history
-    /// buffer. Mono paths only — the stereo framebuffer holds two eyes whose
-    /// reprojections differ, and the daily driver is mono.
+    /// buffer.
     var temporalSS = false
 
     // TSS state. The scene renders offscreen, the accumulation pass writes
@@ -417,7 +416,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var lastDrawTime = CFAbsoluteTimeGetCurrent()
 
     /// Frame-pacing counters, read and reset once a second by the status
-    /// display. A "long" frame overshot the 120 Hz deadline by half a frame —
+    /// display. A "long" frame overshot the target-rate deadline by half a frame —
     /// exactly the hiccups that read as stutter in the glasses. Written on
     /// the render thread, read from the main thread, hence the lock.
     private let statsLock = NSLock()
@@ -470,9 +469,6 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     deinit { stopRenderLoop() }
-
-    /// Set false to fall back to a single centred view, e.g. if SBS is off.
-    var stereo = true
 
     /// Seconds of head-motion prediction. Off by default: prediction fights
     /// latency but amplifies gyroscope noise, and on this hardware the noise
@@ -684,7 +680,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         // Temporal supersampling: retarget the scene pass at the offscreen
         // texture and let the accumulation pass own the drawable. Mono only;
         // when off, everything draws straight to the drawable as before.
-        let tssActive = temporalSS && !stereo && texture != nil
+        let tssActive = temporalSS && texture != nil
         var sceneTarget: MTLTexture?
         if tssActive {
             ensureTSSResources(size: view.drawableSize,
@@ -741,10 +737,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         if let texture {
             let width = Double(view.drawableSize.width)
             let height = Double(view.drawableSize.height)
-            // In SBS the framebuffer holds both eyes across its width, so each
-            // eye's viewport is half as wide but keeps the full aspect ratio.
-            let eyeWidth = stereo ? width / 2 : width
-            let aspect = Float(eyeWidth / height)
+            let aspect = Float(width / height)
 
             let contentAspect = Float(texture.width) / Float(texture.height)
             let model = screen.anchorRotation()
@@ -800,7 +793,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             // 1.0 the desktop is being squeezed into fewer pixels than it has,
             // and no amount of filtering can put the detail back.
             let extent = screen.size(aspect: contentAspect)
-            renderedWidth = Float(eyeWidth) * extent.x
+            renderedWidth = Float(width) * extent.x
                 / (screen.distance * 2 * tan(fovY / 2) * aspect)
 
             // The cursor quad sits on whichever surface the mouse is on, at
@@ -844,45 +837,34 @@ final class Renderer: NSObject, MTKViewDelegate {
                 }
             }
 
-            let eyes: [(offset: Float, originX: Double)] = stereo
-                ? [(-screen.ipd / 2, 0), (screen.ipd / 2, eyeWidth)]
-                : [(0, 0)]
+            let view = screen.viewMatrix(head: head)
+            var uniforms = projection * view * model
+            encoder.setVertexBytes(&uniforms,
+                                   length: MemoryLayout<simd_float4x4>.size,
+                                   index: 1)
 
-            for eye in eyes {
-                encoder.setViewport(MTLViewport(
-                    originX: eye.originX, originY: 0,
-                    width: eyeWidth, height: height,
-                    znear: 0, zfar: 1
-                ))
-                let view = screen.viewMatrix(head: head, eyeOffset: eye.offset)
-                var uniforms = projection * view * model
-                encoder.setVertexBytes(&uniforms,
-                                       length: MemoryLayout<simd_float4x4>.size,
-                                       index: 1)
+            encoder.setRenderPipelineState(
+                antiMoire ? smoothPipelines[fb]
+                          : (crisp ? crispPipelines[fb] : pipelines[fb]))
+            encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
+            encoder.setFragmentTexture(texture, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0,
+                                   vertexCount: Self.meshVertexCount)
 
-                encoder.setRenderPipelineState(
-                    antiMoire ? smoothPipelines[fb]
-                              : (crisp ? crispPipelines[fb] : pipelines[fb]))
-                encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
-                encoder.setFragmentTexture(texture, index: 0)
+            for side in sideRender {
+                encoder.setVertexBuffer(sideVertexBuffers[side.index], offset: 0, index: 0)
+                encoder.setFragmentTexture(side.texture, index: 0)
                 encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0,
                                        vertexCount: Self.meshVertexCount)
+            }
 
-                for side in sideRender {
-                    encoder.setVertexBuffer(sideVertexBuffers[side.index], offset: 0, index: 0)
-                    encoder.setFragmentTexture(side.texture, index: 0)
-                    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0,
-                                           vertexCount: Self.meshVertexCount)
-                }
-
-                if let cursorVertices, let sprite {
-                    encoder.setRenderPipelineState(cursorPipelines[fb])
-                    encoder.setVertexBytes(cursorVertices,
-                                           length: MemoryLayout<SIMD4<Float>>.stride * cursorVertices.count,
-                                           index: 0)
-                    encoder.setFragmentTexture(sprite, index: 0)
-                    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-                }
+            if let cursorVertices, let sprite {
+                encoder.setRenderPipelineState(cursorPipelines[fb])
+                encoder.setVertexBytes(cursorVertices,
+                                       length: MemoryLayout<SIMD4<Float>>.stride * cursorVertices.count,
+                                       index: 0)
+                encoder.setFragmentTexture(sprite, index: 0)
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             }
         }
 

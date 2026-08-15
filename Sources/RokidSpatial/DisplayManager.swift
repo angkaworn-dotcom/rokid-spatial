@@ -1,5 +1,5 @@
 // Finds the glasses among the attached displays and gets them into a state we
-// can render to: side-by-side mode on, mirroring off.
+// can render to: panel in plain 2D mode, mirroring where each source wants it.
 //
 // Mirroring matters more than it sounds. Out of the box the Rokid mirrors the
 // built-in display, so if we captured the desktop and drew it to the glasses
@@ -204,151 +204,54 @@ final class DisplayManager {
     /// very display it covers (verified empirically). So let macOS mirror the
     /// way it insists on, with the glasses as master so the desktop runs at
     /// panel-native size, and there is exactly one desktop anywhere.
-    /// Filled during `prepareGlassesOnly`: the desktop size actually in
-    /// effect, and every 16:10 scaled size the panel offers at ≥90 Hz — the
-    /// settings UI shows exactly this list rather than guessing.
+    ///
+    /// Filled during `prepareGlassesOnly`: the desktop size actually in effect.
     private(set) var glassesDesktopSize = (width: 1920, height: 1200)
-    private(set) var availableDesktopSizes: [(width: Int, height: Int)] = []
 
-    func prepareGlassesOnly(mode: DisplayMode, desktopSize: (width: Int, height: Int)? = nil,
-                            mirrored: Bool = true) throws {
-        availableDesktopSizes = []
+    func prepareGlassesOnly(mode: DisplayMode,
+                            desktopSize: (width: Int, height: Int)? = nil) throws {
         previousMode = try? RokidDisplay.currentMode()
         try RokidDisplay.setMode(mode)
         Thread.sleep(forTimeInterval: 3.0)
 
-        guard var glassesID = findGlassesDisplay() else {
-            throw SetupError.glassesNotFound
-        }
-        glassesDisplayID = glassesID
-        deskDisplayID = onlineDisplays().first { CGDisplayIsBuiltin($0) != 0 }
-
-        if mirrored {
-            // macOS usually re-mirrors on its own within a few seconds of the
-            // mode change — its remembered arrangement finally working *for*
-            // us. Step in if it hasn't, and also if it mirrored the wrong way
-            // round: with the *glasses* as the copy, the panel runs at the
-            // built-in's raster (seen live as an unwanted 1680×1050 desktop)
-            // and ScreenCaptureKit loses the display it was going to capture.
-            let backwards = CGDisplayMirrorsDisplay(glassesID) != kCGNullDirectDisplay
-            if backwards {
-                log?("glasses-only: mirror is backwards (glasses copying the built-in) — re-mastering")
-                _ = reassertUnmirrored()
-                Thread.sleep(forTimeInterval: 1.0)
-            }
-            if CGDisplayIsInMirrorSet(glassesID) == 0 || backwards, let builtin = deskDisplayID {
-                log?("glasses-only: mirroring built-in onto the glasses")
-                try configure { config in
-                    CGConfigureDisplayMirrorOfDisplay(config, builtin, glassesID)
-                }
-                Thread.sleep(forTimeInterval: 1.0)
-            }
-            // Assert the glasses-native raster. The remembered mode macOS
-            // re-applies can be anything a past tangle left behind.
-            setDesktopResolution(glassesID, width: 1920, height: mode == .highRefreshRate ? 1200 : 1080)
-        } else {
-            // Standalone experiment: the 60 Hz built-in member of the mirror
-            // set is exactly what macOS "harmonizes" the flip rate down to
-            // (BetterDisplay #121/#4280 confirm mirroring caps at 60). Run
-            // the glasses as their own display; the built-in stays a dark,
-            // separate desktop parked below. This re-opens the re-mirror war
-            // the mirror-embrace ended — the enforcement machinery from the
-            // extended modes stands guard again (here and in the watchdog).
-            log?("glasses-only: standalone (no mirror) — 120 Hz experiment")
-            enforceUnmirrored(timeout: 15, quiet: 4)
-            // Un-mirroring re-enumerates; stale IDs make everything below
-            // silently no-op.
-            glassesID = findGlassesDisplay() ?? glassesID
-            glassesDisplayID = glassesID
-            deskDisplayID = onlineDisplays().first { CGDisplayIsBuiltin($0) != 0 }
-        }
-
-        // Learn what the panel actually offers, then optionally run the
-        // desktop at a scaled resolution: everything gets bigger, the GPU
-        // upscales to the panel's native raster. The panel never sees
-        // anything but its own timing — this only changes the framebuffer
-        // the desktop is drawn into.
-        // The scaled-size list (and the 16:10 filter it relies on) only makes
-        // sense in the 120 Hz mode; 60 Hz (mode 0) runs the panel's native
-        // 16:9 raster and skips desktop-size selection entirely.
-        if mode == .highRefreshRate,
-           let all = CGDisplayCopyAllDisplayModes(glassesID, nil) as? [CGDisplayMode] {
-            availableDesktopSizes = all
-                .filter { $0.width * 10 == $0.height * 16 && $0.refreshRate >= 90 }
-                .map { (width: $0.width, height: $0.height) }
-                .reduce(into: [(width: Int, height: Int)]()) { list, size in
-                    if !list.contains(where: { $0.width == size.width }) { list.append(size) }
-                }
-                .sorted { $0.width > $1.width }
-        }
-        if let desktopSize {
-            setDesktopResolution(glassesID, width: desktopSize.width, height: desktopSize.height)
-        }
-        if let current = CGDisplayCopyDisplayMode(glassesID) {
-            glassesDesktopSize = (current.width, current.height)
-        }
-
-        if !mirrored { arrangeStandalone() }
-    }
-
-    /// The standalone variants: SBS mode 4 (3840×1200 @ 90 Hz, what
-    /// Station 2 runs), SBS mode 1 (3840×1080 @ 60 Hz), or plain mode 3
-    /// (1920×1200 @ 120 Hz, no stereo). No mirror set anywhere at this
-    /// stage: macOS harmonizes a mirror set's flip rate down to its 60 Hz
-    /// built-in member, and a mirrored member cannot be repositioned out of
-    /// the wall. For the stereo variants the working desktop is a separate
-    /// matching-rate virtual display the controller creates *before* calling
-    /// this — creating a display is itself a reconfiguration, and doing it
-    /// afterwards would invite macOS to re-apply the remembered (mirrored)
-    /// arrangement this just fought off.
-    func prepareStandalone(mode: DisplayMode = .highRefreshRateSBS) throws {
-        availableDesktopSizes = []
-        previousMode = try? RokidDisplay.currentMode()
-        try RokidDisplay.setMode(mode)
-        Thread.sleep(forTimeInterval: 3.0)
-
-        // The re-mirror war again. Short quiet window: the session watchdog
-        // stands guard once a second from here on.
-        enforceUnmirrored(timeout: 15, quiet: 4)
-
-        // Un-mirroring re-enumerates; resolve IDs only after it.
         guard let glassesID = findGlassesDisplay() else {
             throw SetupError.glassesNotFound
         }
         glassesDisplayID = glassesID
         deskDisplayID = onlineDisplays().first { CGDisplayIsBuiltin($0) != 0 }
 
-        // Assert the panel-native raster — the mode macOS remembers for this
-        // display can be anything a past tangle left behind. Every desktop
-        // mode these panel modes offer runs at that mode's one rate
-        // (measured), so only the size needs picking: the SBS slivers are
-        // full-width points at 2.0 backing (3840×1200 / 3840×1080 px);
-        // mode 3 runs a real 1:1 desktop — 1920×1080 by user preference
-        // (16:9, same shape as the 60 Hz daily driver) on the panel's
-        // 1920×1200 raster.
-        setDesktopResolution(glassesID, width: 1920,
-                             height: mode == .highRefreshRate ? 1080
-                                   : mode == .highRefreshRateSBS ? 600 : 540)
+        // macOS usually re-mirrors on its own within a few seconds of the
+        // mode change — its remembered arrangement finally working *for*
+        // us. Step in if it hasn't, and also if it mirrored the wrong way
+        // round: with the *glasses* as the copy, the panel runs at the
+        // built-in's raster (seen live as an unwanted 1680×1050 desktop)
+        // and ScreenCaptureKit loses the display it was going to capture.
+        let backwards = CGDisplayMirrorsDisplay(glassesID) != kCGNullDirectDisplay
+        if backwards {
+            log?("glasses-only: mirror is backwards (glasses copying the built-in) — re-mastering")
+            _ = reassertUnmirrored()
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+        if CGDisplayIsInMirrorSet(glassesID) == 0 || backwards, let builtin = deskDisplayID {
+            log?("glasses-only: mirroring built-in onto the glasses")
+            try configure { config in
+                CGConfigureDisplayMirrorOfDisplay(config, builtin, glassesID)
+            }
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+        // Assert the glasses-native raster. The remembered mode macOS
+        // re-applies can be anything a past tangle left behind.
+        setDesktopResolution(glassesID, width: 1920, height: 1080)
+        // Optionally run the desktop at a scaled resolution: everything gets
+        // bigger, the GPU upscales to the panel's native raster. The panel
+        // never sees anything but its own timing — this only changes the
+        // framebuffer the desktop is drawn into.
+        if let desktopSize {
+            setDesktopResolution(glassesID, width: desktopSize.width, height: desktopSize.height)
+        }
         if let current = CGDisplayCopyDisplayMode(glassesID) {
             glassesDesktopSize = (current.width, current.height)
         }
-    }
-
-    /// Standalone layout: glasses at the origin (main — menu bar and new
-    /// windows land where the eye is), built-in parked directly below so the
-    /// pointer rarely wanders onto the dark panel. Re-run whenever macOS
-    /// re-applies its remembered arrangement.
-    func arrangeStandalone() {
-        guard let glassesID = glassesDisplayID, let deskID = deskDisplayID,
-              deskID != glassesID else { return }
-        let height = Int32(CGDisplayPixelsHigh(glassesID))
-        try? configure { config in
-            var err = CGConfigureDisplayOrigin(config, glassesID, 0, 0)
-            guard err == .success else { return err }
-            err = CGConfigureDisplayOrigin(config, deskID, 0, height)
-            return err
-        }
-        Thread.sleep(forTimeInterval: 0.5)
     }
 
     /// macOS re-applies its remembered display mode during later
@@ -440,20 +343,7 @@ final class DisplayManager {
     /// as macOS likes it. With no overlay and no second desktop there is
     /// nothing left that can trap the user, so there is nothing to enforce
     /// and no helper process to spawn.
-    /// `remirror` is for the standalone experiment: put the built-in back
-    /// into the glasses' mirror set first, so stopping lands in the same
-    /// trap-free state as the mirrored flavour (no second desktop to lose
-    /// windows on).
-    func restorePanelOnly(remirror: Bool = false) {
-        if remirror, let glassesID = glassesDisplayID,
-           CGDisplayIsInMirrorSet(glassesID) == 0,
-           let builtin = deskDisplayID, builtin != glassesID {
-            log?("restore(panel-only): re-mirroring the built-in onto the glasses")
-            try? configure { config in
-                CGConfigureDisplayMirrorOfDisplay(config, builtin, glassesID)
-            }
-            Thread.sleep(forTimeInterval: 1.0)
-        }
+    func restorePanelOnly() {
         log?("restore(panel-only): setting panel to 2D, leaving mirroring alone")
         try? RokidDisplay.setMode(.sameOnBoth)
     }
@@ -547,8 +437,7 @@ final class DisplayManager {
 
     /// Windows sitting on a display the user cannot see — by default the
     /// glasses display, where the overlay hides them; pass `regionID` for
-    /// another hidden surface (the standalone variants' dark parked
-    /// built-in).
+    /// another hidden surface.
     ///
     /// Their owners appear to have vanished: the window is not on the captured
     /// desktop, so it never reaches the glasses, and on the hidden display
@@ -582,9 +471,7 @@ final class DisplayManager {
 
     /// Where a side screen hangs relative to the wall's main display —
     /// left/right for the wide and portrait layouts, above/below for the
-    /// stacked one. The stacked placements are only used by plain
-    /// glasses-only sessions, whose parked list is empty, so they can never
-    /// collide with the parked displays stacked above the wall.
+    /// stacked one.
     enum SidePlacement {
         case right, left, above, below
     }
@@ -595,8 +482,7 @@ final class DisplayManager {
     /// pointer has to be pushed there deliberately. macOS's remembered
     /// arrangements scatter these on re-apply; the watchdog checks cheaply
     /// every second and fixes in one batched reconfiguration. Glasses-only
-    /// passes the glasses as main; SBS-90 passes the working virtual
-    /// desktop as main and parks the glasses and the built-in.
+    /// passes the glasses as main and parks nothing.
     func wallLayoutIsBroken(main mainID: CGDirectDisplayID,
                             sides: [(id: CGDirectDisplayID, placement: SidePlacement)],
                             parked: [CGDirectDisplayID] = []) -> Bool {
@@ -662,62 +548,23 @@ final class DisplayManager {
 
     /// Glasses-only wants the built-in *inside* the glasses' mirror set —
     /// dark, with nothing to lose windows on. macOS re-applies whatever
-    /// arrangement it last remembered on every reconfiguration, and after
-    /// the standalone experiments that memory is "unmirrored", so the
-    /// built-in kept popping back out as a live 1680×1050 desktop (the
-    /// "three screens are broken" report). Returns true if it had to act.
+    /// arrangement it last remembered on every reconfiguration, and when that
+    /// memory is "unmirrored" the built-in pops back out as a live 1680×1050
+    /// desktop (the "three screens are broken" report). Returns true if it
+    /// had to act.
     func reassertGlassesOnlyMirror() -> Bool {
         guard let glassesID = glassesDisplayID,
               let builtin = deskDisplayID, builtin != glassesID,
-              // Membership alone is not enough: after the SBS sessions macOS
-              // remembers built-in↔side-display pairs and re-applies them,
-              // and a built-in mirroring the *left side* passed the old
-              // membership check while the laptop showed the wrong screen
-              // (seen live). The master must be the glasses, specifically.
+              // Membership alone is not enough: macOS remembers
+              // built-in↔side-display pairs and re-applies them, and a
+              // built-in mirroring the *left side* passed the old membership
+              // check while the laptop showed the wrong screen (seen live).
+              // The master must be the glasses, specifically.
               CGDisplayMirrorsDisplay(builtin) != glassesID else { return false }
         log?("glasses-only: built-in is not mirroring the glasses — re-mirroring")
         try? configure { config in
             CGConfigureDisplayMirrorOfDisplay(config, builtin, glassesID)
         }
-        return true
-    }
-
-    /// Standalone watchdog fault: some display is mirrored that shouldn't
-    /// be. The mirror macOS re-applies is not always onto the glasses: seen
-    /// live 2026-08-12, creating the side displays brought the built-in back
-    /// mirrored onto the *left side* virtual display, which a glasses-focused
-    /// check missed entirely (and the layout fix then looped forever trying
-    /// to move a display that mirroring had pinned). SBS-60 allows exactly
-    /// one pair — the built-in as slave of `allowedMaster` (the working
-    /// desktop, its stranded-window fix); everything else, including a
-    /// wrong-way pair, is a fault.
-    func unexpectedMirror(allowedMaster: CGDirectDisplayID? = nil) -> Bool {
-        onlineDisplays().contains { id in
-            guard CGDisplayIsInMirrorSet(id) != 0 else { return false }
-            guard let allowedMaster else { return true }
-            if id == allowedMaster {
-                return CGDisplayMirrorsDisplay(id) != kCGNullDirectDisplay
-            }
-            if id == deskDisplayID {
-                return CGDisplayMirrorsDisplay(id) != allowedMaster
-            }
-            return true
-        }
-    }
-
-    /// SBS-60's stranded-window fix: put the built-in into the *working
-    /// desktop's* mirror set (not the glasses'). Its desktop — and every
-    /// window the user had open before Start — merges into the one the
-    /// glasses show. Returns true if it had to act.
-    @discardableResult
-    func mirrorBuiltinOntoWorking(_ workingID: CGDirectDisplayID) -> Bool {
-        guard let builtin = deskDisplayID, builtin != workingID,
-              CGDisplayIsInMirrorSet(builtin) == 0 else { return false }
-        log?("standalone: merging the built-in's desktop into the working display")
-        try? configure { config in
-            CGConfigureDisplayMirrorOfDisplay(config, builtin, workingID)
-        }
-        Thread.sleep(forTimeInterval: 0.5)
         return true
     }
 
@@ -733,42 +580,6 @@ final class DisplayManager {
         }
         waitUntilUnmirrored(timeout: 3)
         return onlineDisplays().allSatisfy { CGDisplayIsInMirrorSet($0) == 0 }
-    }
-
-    /// The Dock parks its backing window on one display; after the
-    /// standalone shuffle that can be a hidden one (seen live: the glasses'
-    /// sliver desktop), which takes the Dock and its menus out of reach.
-    /// Detect it and bounce the Dock — it respawns on the current main
-    /// display, which is the wall's centre screen. Only worth calling once
-    /// the wall layout is settled: bounced too early (seen live), the Dock
-    /// respawns onto the still-scrambled arrangement and lands hidden again.
-    /// Returns true if it acted.
-    @discardableResult
-    func rehomeDockIfHidden(hiddenDisplays: [CGDirectDisplayID]) -> Bool {
-        guard !hiddenDisplays.isEmpty,
-              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly],
-                                                    kCGNullWindowID) as? [[String: Any]]
-        else { return false }
-        let regions = hiddenDisplays.map { CGDisplayBounds($0) }
-        let dockHidden = list.contains { window in
-            guard let owner = window[kCGWindowOwnerName as String] as? String,
-                  owner == "Dock",
-                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
-                  let x = bounds["X"] as? Double, let y = bounds["Y"] as? Double,
-                  let width = bounds["Width"] as? Double,
-                  let height = bounds["Height"] as? Double,
-                  width > 400, height > 100
-            else { return false }
-            let centre = CGPoint(x: x + width / 2, y: y + height / 2)
-            return regions.contains { $0.contains(centre) }
-        }
-        guard dockHidden else { return false }
-        log?("standalone: the Dock parked on a hidden display — bouncing it home")
-        let kill = Process()
-        kill.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-        kill.arguments = ["Dock"]
-        try? kill.run()
-        return true
     }
 
     private func configure(_ body: (CGDisplayConfigRef?) -> CGError) throws {
@@ -805,9 +616,8 @@ final class DisplayManager {
 
     /// True pixel dimensions of the glasses display.
     ///
-    /// `glassesFrame` is in points, and the backing scale differs by panel
-    /// mode — side-by-side reports 2.0, the 120 Hz mode 1.0 — so assuming
-    /// either one produces a wrong figure half the time.
+    /// `glassesFrame` is in points and the backing scale is the panel's own,
+    /// so assuming a scale produces a wrong figure.
     var glassesPixelSize: CGSize {
         guard let screen = glassesScreen else { return .zero }
         return CGSize(width: screen.frame.width * screen.backingScaleFactor,

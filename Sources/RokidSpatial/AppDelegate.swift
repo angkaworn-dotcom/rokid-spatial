@@ -17,12 +17,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setUpHotkeys()
         showSettings()
 
-        // Standalone sessions swap the desktop out from under the settings
-        // window, leaving it on a hidden display — unreachable, and the
-        // user's only way out was the emergency hotkey (seen live). One
-        // early fix is not enough either: macOS re-applies remembered
-        // arrangements for many seconds after startup and threw the window
-        // back onto the glasses' sliver (also seen live). Retry on a
+        // Glasses-only sessions rearrange the desktop out from under the
+        // settings window, and the side screens can leave it somewhere the
+        // user cannot reach — their only way out was the emergency hotkey
+        // (seen live). One early fix is not enough either: macOS re-applies
+        // remembered arrangements for many seconds after startup. Retry on a
         // schedule; each attempt acts only if the window is misplaced.
         runObserver = controller.$isRunning.sink { [weak self] running in
             guard let self else { return }
@@ -57,17 +56,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            let source = SpatialController.CaptureSource(
                rawValue: String(flag.dropFirst("--source=".count))) {
             controller.source = source
-        }
-        // `--sbs` (90 Hz), `--sbs=60`, or `--sbs=120` (mode 3, not actually
-        // SBS — the flag name stays for muscle memory) opts the session into
-        // a standalone variant, so a rebuild can be launched straight into
-        // the mode under test: `--source=glassesOnly --sbs=60 --autostart`.
-        if CommandLine.arguments.contains("--sbs") {
-            controller.sbsMode = .sbs90
-        } else if CommandLine.arguments.contains("--sbs=60") {
-            controller.sbsMode = .sbs60
-        } else if CommandLine.arguments.contains("--sbs=120") {
-            controller.sbsMode = .hz120
         }
         // `--hud` overlays the Metal Performance HUD on the glasses layer —
         // the Direct-vs-Composited readout the direct-scanout work steers by.
@@ -177,11 +165,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
-    /// During a glasses-only session (any variant), make sure the settings
-    /// window sits on the wall's main desktop (the display at the origin —
-    /// the one the eye sees straight ahead). macOS's arrangement shuffles
-    /// leave it on side screens (a head-turn away, which reads as "the
-    /// window won't open") or on hidden desktops in the standalone variants.
+    /// During a glasses-only session, make sure the settings window sits on
+    /// the wall's main desktop (the display at the origin — the one the eye
+    /// sees straight ahead). macOS's arrangement shuffles leave it on side
+    /// screens, a head-turn away, which reads as "the window won't open".
     private func relocateSettingsIfNeeded() {
         guard controller.isRunning, controller.source == .glassesOnly,
               let window = settingsWindow,

@@ -83,9 +83,7 @@ struct SettingsView: View {
             }
 
             if !controller.strandedApps.isEmpty {
-                Text(WindowRescue.hasPermission
-                     ? "Hidden on a covered screen: \(controller.strandedApps.joined(separator: ", ")). Moving them back…"
-                     : "Hidden on a covered screen: \(controller.strandedApps.joined(separator: ", ")). Grant Rokid Spatial Accessibility permission (System Settings → Privacy & Security) to move them back automatically, or press Stop to get them back.")
+                Text("Hidden on a covered screen: \(controller.strandedApps.joined(separator: ", ")). Press Stop to get them back.")
                     .font(.caption2)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -190,10 +188,7 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    // The SBS variants' wall parks displays above it,
-                    // exactly where Stacked would hang a screen.
-                    .disabled(controller.isRunning || controller.sbsMode != .off
-                              || controller.sideScreens == .none)
+                    .disabled(controller.isRunning || controller.sideScreens == .none)
                 }
                 if controller.sideScreens == .none {
                     Text("Layout applies to the side screens — pick Right or L + R above first.")
@@ -216,29 +211,6 @@ struct SettingsView: View {
                     }
                     slider("Gap", value: $controller.screenGap,
                            range: 0...10, unit: "°", format: "%.0f")
-                }
-                labelled("Panel mode") {
-                    // 120 Hz is hidden, not gone: WindowServer only holds
-                    // it steady in bursts (the direct-scanout research),
-                    // and an unsteady 120 reads worse than a rock-solid 60.
-                    // The user moved that goal to the Windows port. The
-                    // mode itself stays reachable via --sbs=120 for
-                    // future research sessions.
-                    Picker("", selection: $controller.sbsMode) {
-                        ForEach(SpatialController.SBSMode.allCases
-                            .filter { $0 != .hz120 }) { mode in
-                            Text(mode.label).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .disabled(controller.isRunning)
-                }
-                if controller.sbsMode != .off {
-                    Text(controller.sbsMode.detail)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -344,11 +316,6 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            // Eye separation for the stereo (SBS) render path. The range
-            // is deliberately far wider than anatomical IPD — it is a
-            // depth tuning knob: 0 = flat, high = hyperstereo.
-            slider("IPD", value: $controller.ipd,
-                   range: 0...0.200, unit: "m", format: "%.3f")
             slider("Lock while turning", value: $controller.motionLock,
                    range: 0...1, unit: "", format: "%.2f")
             slider("Prediction", value: $controller.lookAhead,

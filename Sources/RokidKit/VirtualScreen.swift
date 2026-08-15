@@ -46,7 +46,7 @@ public final class VirtualScreen {
 
     /// Distance from the eyes to the virtual screen, in metres. Note that the
     /// glasses' optics fix *focus* at ~6 m no matter what this says; this
-    /// changes apparent position and stereo disparity, not accommodation.
+    /// changes apparent position, not accommodation.
     public var distance: Float = 2.5 {
         didSet { distance = min(max(distance, 0.4), 12.0) }
     }
@@ -126,18 +126,6 @@ public final class VirtualScreen {
 
     /// Rotation rate at which `motionLock` reaches full strength, degrees/s.
     public var motionLockFullSpeed: Float = 60
-
-    /// Interpupillary distance in metres, used for stereo separation.
-    public var ipd: Float = 0.063 {
-        // Far wider than anatomical IPD (54–74 mm) on purpose: this offset is
-        // a *depth tuning knob* against the panel's fixed SBS optics, not a
-        // measurement of the user's face. 0 renders flat — a useful reference
-        // point — and large values give hyperstereo (the screen reads nearer
-        // and more solid). Widened twice on user request during the first
-        // SBS sessions; beyond ~150 mm fusion may break into double vision,
-        // but the user's eyes are the judge here, not the clamp.
-        didSet { ipd = min(max(ipd, 0), 0.200) }
-    }
 
     // MARK: State
 
@@ -250,11 +238,10 @@ public final class VirtualScreen {
         simd_float4x4(displayAnchor)
     }
 
-    /// View matrix for one eye: undo the head rotation, then step sideways by
-    /// half the IPD. Passing 0 for `eyeOffset` gives the monocular view.
-    public func viewMatrix(head: simd_quatf, eyeOffset: Float) -> simd_float4x4 {
-        let rotation = simd_float4x4(head.inverse.normalized)
-        return simd_float4x4(translation: SIMD3(-eyeOffset, 0, 0)) * rotation
+    /// View matrix: undo the head rotation. The view is monocular — the same
+    /// image reaches both eyes.
+    public func viewMatrix(head: simd_quatf) -> simd_float4x4 {
+        simd_float4x4(head.inverse.normalized)
     }
 }
 
