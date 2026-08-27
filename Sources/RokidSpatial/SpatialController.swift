@@ -1370,7 +1370,15 @@ final class SpatialController: ObservableObject {
         window.isOpaque = true
         window.hasShadow = false
         window.ignoresMouseEvents = true
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
+        // .fullScreenAuxiliary, not .fullScreenNone: the green button on any
+        // window on the glasses display switches that display to a fullscreen
+        // Space, and a .fullScreenNone overlay is barred from following it
+        // there. The user then sees the raw app head-locked on the panel —
+        // no virtual screen, no side screens, and no cursor either, because
+        // the hardware cursor is hidden by design and the sprite lives in
+        // the overlay. Auxiliary lets the overlay join fullscreen Spaces,
+        // so going fullscreen just changes what the centre screen shows.
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         window.orderFrontRegardless()
         self.window = window
 
