@@ -789,10 +789,45 @@ final class SpatialController: ObservableObject {
                 sideCapture.onFrame = { [weak renderer] buffer in
                     renderer?.submitSide(index, frame: buffer)
                 }
-                sideCapture.onStop = { error in
+                var sideRestartAttempts = 0
+                var sideLastRestart = Date.distantPast
+                sideCapture.onStop = { [weak self, weak renderer] error in
                     // Losing a side screen is cosmetic; never end the
-                    // session over it.
+                    // session over it. But the system does kill side
+                    // streams mid-session while the virtual display is
+                    // still up ("the stream was stopped by the system",
+                    // seen around fullscreen transitions and Space
+                    // switches) — and a dead stream leaves the panel
+                    // frozen on its last frame, which reads as "typing
+                    // stopped appearing". Bring it back, bounded; the
+                    // delay also lets a teardown-driven stop fall through
+                    // the isRunning guard instead of resurrecting a
+                    // stream the session no longer owns.
                     Self.appendLog("side \(index) capture stopped: \(error.localizedDescription)")
+                    Task { @MainActor in
+                        guard let self, self.isRunning, renderer != nil else { return }
+                        // A stream that survived a full minute earned the
+                        // counter back: the backoff exists to brake rapid
+                        // kill-restart loops, not to make the tenth
+                        // recovery of a long day slower than the first.
+                        if Date().timeIntervalSince(sideLastRestart) > 60 {
+                            sideRestartAttempts = 0
+                        }
+                        sideRestartAttempts += 1
+                        guard sideRestartAttempts <= 30 else { return }
+                        let delay = min(Double(sideRestartAttempts) * 0.5, 5)
+                        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                        guard self.isRunning else { return }
+                        do {
+                            try await sideCapture.start(displayID: sideID,
+                                                        frameRate: self.sideCaptureRate,
+                                                        showsCursor: false)
+                            sideLastRestart = Date()
+                            Self.appendLog("side \(index) capture restarted (attempt \(sideRestartAttempts))")
+                        } catch {
+                            Self.appendLog("side \(index) capture restart failed: \(error)")
+                        }
+                    }
                 }
                 do {
                     // Mostly-static content; half rate is plenty and keeps
