@@ -1414,6 +1414,13 @@ final class SpatialController: ObservableObject {
         // the overlay. Auxiliary lets the overlay join fullscreen Spaces,
         // so going fullscreen just changes what the centre screen shows.
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        // Invisible to screenshots and other outside capture: an interactive
+        // Cmd-Shift-4 lands on the glasses display, and without this it
+        // photographs the rendered scene — a perspective-tilted panel wall —
+        // instead of the flat desktop underneath; the window picker can only
+        // ever pick the overlay for the same reason. Our own SCK stream is
+        // unaffected: it already excludes this window by number.
+        window.sharingType = .none
         window.orderFrontRegardless()
         self.window = window
 
