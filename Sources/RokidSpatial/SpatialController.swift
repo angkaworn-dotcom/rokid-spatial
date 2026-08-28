@@ -789,10 +789,45 @@ final class SpatialController: ObservableObject {
                 sideCapture.onFrame = { [weak renderer] buffer in
                     renderer?.submitSide(index, frame: buffer)
                 }
-                sideCapture.onStop = { error in
+                var sideRestartAttempts = 0
+                var sideLastRestart = Date.distantPast
+                sideCapture.onStop = { [weak self, weak renderer] error in
                     // Losing a side screen is cosmetic; never end the
-                    // session over it.
+                    // session over it. But the system does kill side
+                    // streams mid-session while the virtual display is
+                    // still up ("the stream was stopped by the system",
+                    // seen around fullscreen transitions and Space
+                    // switches) — and a dead stream leaves the panel
+                    // frozen on its last frame, which reads as "typing
+                    // stopped appearing". Bring it back, bounded; the
+                    // delay also lets a teardown-driven stop fall through
+                    // the isRunning guard instead of resurrecting a
+                    // stream the session no longer owns.
                     Self.appendLog("side \(index) capture stopped: \(error.localizedDescription)")
+                    Task { @MainActor in
+                        guard let self, self.isRunning, renderer != nil else { return }
+                        // A stream that survived a full minute earned the
+                        // counter back: the backoff exists to brake rapid
+                        // kill-restart loops, not to make the tenth
+                        // recovery of a long day slower than the first.
+                        if Date().timeIntervalSince(sideLastRestart) > 60 {
+                            sideRestartAttempts = 0
+                        }
+                        sideRestartAttempts += 1
+                        guard sideRestartAttempts <= 30 else { return }
+                        let delay = min(Double(sideRestartAttempts) * 0.5, 5)
+                        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                        guard self.isRunning else { return }
+                        do {
+                            try await sideCapture.start(displayID: sideID,
+                                                        frameRate: self.sideCaptureRate,
+                                                        showsCursor: false)
+                            sideLastRestart = Date()
+                            Self.appendLog("side \(index) capture restarted (attempt \(sideRestartAttempts))")
+                        } catch {
+                            Self.appendLog("side \(index) capture restart failed: \(error)")
+                        }
+                    }
                 }
                 do {
                     // Mostly-static content; half rate is plenty and keeps
@@ -1370,7 +1405,22 @@ final class SpatialController: ObservableObject {
         window.isOpaque = true
         window.hasShadow = false
         window.ignoresMouseEvents = true
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
+        // .fullScreenAuxiliary, not .fullScreenNone: the green button on any
+        // window on the glasses display switches that display to a fullscreen
+        // Space, and a .fullScreenNone overlay is barred from following it
+        // there. The user then sees the raw app head-locked on the panel —
+        // no virtual screen, no side screens, and no cursor either, because
+        // the hardware cursor is hidden by design and the sprite lives in
+        // the overlay. Auxiliary lets the overlay join fullscreen Spaces,
+        // so going fullscreen just changes what the centre screen shows.
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        // Invisible to screenshots and other outside capture: an interactive
+        // Cmd-Shift-4 lands on the glasses display, and without this it
+        // photographs the rendered scene — a perspective-tilted panel wall —
+        // instead of the flat desktop underneath; the window picker can only
+        // ever pick the overlay for the same reason. Our own SCK stream is
+        // unaffected: it already excludes this window by number.
+        window.sharingType = .none
         window.orderFrontRegardless()
         self.window = window
 
