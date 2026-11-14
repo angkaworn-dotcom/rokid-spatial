@@ -43,7 +43,7 @@ public enum DisplayControlError: Error, CustomStringConvertible {
         case .initFailed:
             return "libusb_init failed"
         case .deviceNotFound:
-            return "no Rokid Max found (VID 0x04D2, PID 0x162F) — is it plugged in?"
+            return "no Rokid glasses found (VID 0x04D2, PID 0x162F) — are they plugged in?"
         case .transferFailed(let what, let code):
             let message = String(cString: libusb_strerror(code))
             return "\(what) failed: \(message) (\(code))"

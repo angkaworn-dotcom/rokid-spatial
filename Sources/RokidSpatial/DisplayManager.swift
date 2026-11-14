@@ -31,7 +31,7 @@ final class DisplayManager {
         var description: String {
             switch self {
             case .glassesNotFound:
-                return "No display named \"Rokid Max\" found. Plug the glasses into a USB-C port that carries video."
+                return "No Rokid display found. Plug the glasses into a USB-C port that carries video."
             case .noOtherDisplay:
                 return "Only the glasses are attached — there is no desktop left to capture."
             case .configurationFailed(let e):
