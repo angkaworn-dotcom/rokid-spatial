@@ -4,6 +4,7 @@
 // which means the project builds with only the Command Line Tools installed —
 // the offline `metal` compiler ships with full Xcode and is not required here.
 
+import AppKit
 import Foundation
 import Metal
 import MetalKit
@@ -238,8 +239,14 @@ fragment float4 fragmentCursor(VertexOut in [[stage_in]],
 """
 
 final class Renderer: NSObject, MTKViewDelegate {
-    /// Diagonal field of view of the Rokid Max optics.
-    private static let diagonalFOV: Float = 50 * .pi / 180
+    /// Diagonal field of view of the optics: 50° on the Rokid Max, 43°
+    /// (advertised) on the Rokid Air. Decided once, from the display name.
+    private static let diagonalFOV: Float = {
+        let isAir = NSScreen.screens.contains {
+            $0.localizedName.localizedCaseInsensitiveContains("Rokid Air")
+        }
+        return (isAir ? 43 : 50) * .pi / 180
+    }()
 
     /// Vertical slices in the screen mesh. Enough that a fully curved wide
     /// screen renders smoothly; irrelevant to flat screens.

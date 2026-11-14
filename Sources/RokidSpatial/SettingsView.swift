@@ -11,23 +11,27 @@ import RokidKit
 /// deep and interleaved unrelated settings. Tabs give each concern a page:
 /// what the screen *is* (Screen), how it treats your body (Comfort), and the
 /// numbers most sessions never touch (Tuning).
+enum SettingsTab: String, CaseIterable, Identifiable {
+    case screen = "Screen"
+    case comfort = "Comfort"
+    case tuning = "Tuning"
+    var id: String { rawValue }
+}
+
 struct SettingsView: View {
     @ObservedObject var controller: SpatialController
 
-    private enum Tab: String, CaseIterable, Identifiable {
-        case screen = "Screen"
-        case comfort = "Comfort"
-        case tuning = "Tuning"
-        var id: String { rawValue }
-    }
+    typealias Tab = SettingsTab
 
-    @State private var tab: Tab = .screen
+    // Kept on the controller rather than in @State: on Command Line Tools
+    // without Xcode, the SwiftUI macro plugin behind @State is missing.
+    private var tab: Tab { controller.settingsTab }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
 
-            Picker("", selection: $tab) {
+            Picker("", selection: $controller.settingsTab) {
                 ForEach(Tab.allCases) { tab in
                     Text(tab.rawValue).tag(tab)
                 }
@@ -152,9 +156,18 @@ struct SettingsView: View {
             }
 
             slider("Distance", value: $controller.distance,
-                   range: 0.4...12, unit: "m", format: "%.1f")
+                   range: 0.4...12, unit: "m", format: "%.2f")
             slider("Size", value: $controller.diagonal,
-                   range: 0.3...8, unit: "m", format: "%.1f")
+                   range: 0.3...8, unit: "m", format: "%.2f")
+            HStack {
+                Text(String(format: "≈ %.0f″ monitor at 70 cm",
+                            controller.diagonal / controller.distance * 0.7 / 0.0254))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("27″ monitor") { controller.applyMonitor27Preset() }
+                    .controlSize(.small)
+            }
             slider("Height", value: $controller.height,
                    range: -1.5...1.5, unit: "m", format: "%+.2f")
             HStack {

@@ -31,7 +31,9 @@ final class SpatialController: ObservableObject {
     /// for an app to opt out.
     @Published var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
 
-    @Published var source: CaptureSource = .mirror { didSet { persist(source.rawValue, "source") } }
+    @Published var settingsTab: SettingsTab = .screen
+
+    @Published var source: CaptureSource = .glassesOnly { didSet { persist(source.rawValue, "source") } }
 
     // Anchored by default (user preference): the screen stays put in the
     // room, which is also the only mode the multi-screen wall allows.
@@ -45,8 +47,17 @@ final class SpatialController: ObservableObject {
             persist(mode.rawValue, "anchorMode")
         }
     }
-    @Published var distance: Float = 2.5 { didSet { screen.distance = distance; persist(distance, "distance") } }
-    @Published var diagonal: Float = 1.5 { didSet { screen.diagonal = diagonal; persist(diagonal, "diagonal") } }
+    @Published var distance: Float = 0.7 { didSet { screen.distance = distance; persist(distance, "distance") } }
+    @Published var diagonal: Float = 0.6858 { didSet { screen.diagonal = diagonal; persist(diagonal, "diagonal") } }
+    /// A 27-inch desktop monitor at a normal working distance (70 cm).
+    /// Only the angle the screen subtends matters on these optics, so this
+    /// looks exactly as big as a real 27″ monitor on a desk.
+    func applyMonitor27Preset() {
+        distance = 0.7
+        diagonal = 27 * 0.0254
+        height = 0
+    }
+
     @Published var height: Float = 0 { didSet { screen.verticalOffset = height; persist(height, "height") } }
     @Published var curved = false { didSet { screen.curved = curved; persist(curved, "curved") } }
     /// Glasses-only: extra virtual desktops rendered as screens hanging next

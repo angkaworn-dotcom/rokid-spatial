@@ -1,4 +1,12 @@
-// Reads the Rokid Max IMU stream off the vendor HID interface.
+// Reads the Rokid Max / Rokid Air IMU stream off the vendor HID interface.
+//
+// Rokid Air (verified on firmware 5.0.7): instead of report 17 it sends
+// report 4 — one packet per sensor (byte 1: 1 = accel, 2 = gyro, 3 = mag),
+// u64 µs timestamp at offset 9, f32[3] vector at offset 21 — plus report 2
+// carrying keys and the proximity sensor (byte 51). Accelerometer and
+// gyroscope packets with equal timestamps are paired into one sample, and the
+// timestamp is converted to nanoseconds so the fusion code is model-agnostic.
+// Layout from ar-drivers-rs (src/rokid.rs), timestamp unit measured.
 //
 // Packet layout is documented in PROTOCOL.md. The short version: report 17
 // arrives at ~440 Hz carrying a nanosecond timestamp followed by three float
@@ -32,7 +40,7 @@ public enum RokidIMUError: Error, CustomStringConvertible {
         case .managerOpenFailed(let r):
             return "IOHIDManagerOpen failed: 0x\(String(format: "%08x", r))"
         case .deviceNotFound:
-            return "no Rokid Max found (VID 0x04D2, PID 0x162F) — is it plugged in?"
+            return "no Rokid glasses found (VID 0x04D2, PID 0x162F) — are they plugged in?"
         }
     }
 }
@@ -50,6 +58,18 @@ public final class RokidIMU {
     private static let offGyro = 21
     private static let offMag = 33
     private static let offProxy = 46
+
+    // Rokid Air (report 4 sensor packets, report 2 misc packets).
+    private static let airSensorReportID: UInt32 = 4
+    private static let airMiscReportID: UInt32 = 2
+    private static let airOffSensorType = 1
+    private static let airOffTimestamp = 9
+    private static let airOffVector = 21
+    private static let airOffProxy = 51
+    private var airAccel: (SIMD3<Float>, UInt64)?
+    private var airGyro: (SIMD3<Float>, UInt64)?
+    private var airMag = SIMD3<Float>(repeating: 0)
+    private var airWorn = true
 
     private var manager: IOHIDManager?
     private var buffer: UnsafeMutablePointer<UInt8>?
@@ -120,6 +140,10 @@ public final class RokidIMU {
     }
 
     private func handle(reportID: UInt32, report: UnsafeMutablePointer<UInt8>, length: Int) {
+        if reportID == Self.airSensorReportID || reportID == Self.airMiscReportID {
+            handleAir(reportID: reportID, report: report, length: length)
+            return
+        }
         guard reportID == Self.expectedReportID, length >= Self.offProxy + 1 else { return }
 
         let sample = IMUSample(
@@ -130,6 +154,30 @@ public final class RokidIMU {
             worn: report[Self.offProxy] != 0
         )
         onSample(sample)
+    }
+
+    private func handleAir(reportID: UInt32, report: UnsafeMutablePointer<UInt8>, length: Int) {
+        if reportID == Self.airMiscReportID {
+            if length > Self.airOffProxy { airWorn = report[Self.airOffProxy] != 0 }
+            return
+        }
+        guard length >= Self.airOffVector + 12 else { return }
+        let timestamp = Self.u64(report, Self.airOffTimestamp)
+        let vector = Self.vec3(report, Self.airOffVector)
+        switch report[Self.airOffSensorType] {
+        case 1: airAccel = (vector, timestamp)
+        case 2: airGyro = (vector, timestamp)
+        case 3: airMag = vector; return
+        default: return
+        }
+        guard let (accel, accelTS) = airAccel, let (gyro, gyroTS) = airGyro,
+              accelTS == gyroTS else { return }
+        airAccel = nil
+        airGyro = nil
+        onSample(IMUSample(
+            timestamp: accelTS &* 1000,  // µs → ns
+            accel: accel, gyro: gyro, mag: airMag, worn: airWorn
+        ))
     }
 
     // MARK: - Little-endian readers
